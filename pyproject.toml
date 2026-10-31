@@ -9,7 +9,11 @@ description = "A reliable webhook and event-processing backend."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "alembic>=1.20,<2.0",
     "fastapi>=0.115,<1.0",
+    "pydantic-settings>=2.7,<3.0",
+    "psycopg[binary]>=3.2,<4.0",
+    "sqlalchemy>=2.0,<3.0",
     "uvicorn[standard]>=0.32,<1.0",
 ]
 
@@ -19,6 +23,15 @@ dev = [
     "pytest>=8.0,<9.0",
 ]
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app", "app.*"]
+exclude = ["migrations", "migrations.*", "tests", "tests.*"]
+namespaces = false
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "pg_integration: opt-in tests requiring the isolated PostgreSQL test database",
+]
 

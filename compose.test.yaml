@@ -1,0 +1,26 @@
+name: eventledger-test
+
+services:
+  db-test:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "${TEST_POSTGRES_DB:?TEST_POSTGRES_DB is required}"
+      POSTGRES_USER: "${TEST_POSTGRES_USER:?TEST_POSTGRES_USER is required}"
+      POSTGRES_PASSWORD: "${TEST_POSTGRES_PASSWORD:?TEST_POSTGRES_PASSWORD is required}"
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - postgres_test_data:/var/lib/postgresql
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  postgres_test_data:
+

@@ -13,6 +13,8 @@ dist/
 # Environment files
 .env
 .env.*
+!.env.example
+!.env.test.example
 
 # Test and coverage caches
 .pytest_cache/
