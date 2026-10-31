@@ -1,4 +1,4 @@
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,6 +25,71 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="EVENTLEDGER_SOURCE_ID",
     )
+    worker_poll_interval_seconds: float = Field(
+        default=1.0,
+        gt=0,
+        le=60,
+        validation_alias="WORKER_POLL_INTERVAL_SECONDS",
+    )
+    worker_lease_duration_seconds: int = Field(
+        default=30,
+        ge=1,
+        le=86_400,
+        validation_alias="WORKER_LEASE_DURATION_SECONDS",
+    )
+    worker_max_attempts: int = Field(
+        default=3,
+        ge=1,
+        le=100,
+        validation_alias="WORKER_MAX_ATTEMPTS",
+    )
+    worker_retry_base_seconds: int = Field(
+        default=2,
+        ge=1,
+        le=86_400,
+        validation_alias="WORKER_RETRY_BASE_SECONDS",
+    )
+    worker_retry_max_seconds: int = Field(
+        default=60,
+        ge=1,
+        le=86_400,
+        validation_alias="WORKER_RETRY_MAX_SECONDS",
+    )
+    worker_identifier: str | None = Field(
+        default=None,
+        max_length=100,
+        validation_alias="WORKER_IDENTIFIER",
+    )
+    worker_failure_simulation_enabled: bool = Field(
+        default=False,
+        validation_alias="WORKER_FAILURE_SIMULATION_ENABLED",
+    )
+    worker_simulation_max_slow_seconds: float = Field(
+        default=30,
+        gt=0,
+        le=300,
+        validation_alias="WORKER_SIMULATION_MAX_SLOW_SECONDS",
+    )
+
+    @field_validator("worker_identifier")
+    @classmethod
+    def validate_worker_identifier(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not value.strip() or value != value.strip():
+            raise ValueError("worker identifier must be nonempty without outer whitespace")
+        if not value.isprintable():
+            raise ValueError("worker identifier must not contain control characters")
+        return value
+
+    @model_validator(mode="after")
+    def validate_worker_retry_bounds(self) -> "Settings":
+        if self.worker_retry_max_seconds < self.worker_retry_base_seconds:
+            raise ValueError(
+                "WORKER_RETRY_MAX_SECONDS must be greater than or equal to "
+                "WORKER_RETRY_BASE_SECONDS"
+            )
+        return self
 
 
 settings = Settings()

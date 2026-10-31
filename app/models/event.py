@@ -35,7 +35,29 @@ class Event(Base):
             "attempt_count >= 0",
             name="attempt_count_nonnegative",
         ),
+        CheckConstraint(
+            "(status = 'processing' "
+            "AND lease_token IS NOT NULL "
+            "AND lease_expires_at IS NOT NULL) "
+            "OR (status <> 'processing' "
+            "AND lease_token IS NULL "
+            "AND lease_expires_at IS NULL)",
+            name="lease_state_consistent",
+        ),
         Index("ix_events_status_created_at", "status", "created_at"),
+        Index(
+            "ix_events_pending_claim",
+            "next_attempt_at",
+            "created_at",
+            "id",
+            postgresql_where=text("status = 'pending'"),
+        ),
+        Index(
+            "ix_events_expired_lease",
+            "lease_expires_at",
+            "id",
+            postgresql_where=text("status = 'processing'"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -61,6 +83,19 @@ class Event(Base):
         server_default=text("0"),
     )
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    lease_token: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        nullable=True,
+    )
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
