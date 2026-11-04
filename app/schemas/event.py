@@ -18,6 +18,19 @@ EventStatus: TypeAlias = Literal[
     "failed",
 ]
 
+ProcessingAttemptOutcome: TypeAlias = Literal[
+    "completed",
+    "retryable_failure",
+    "permanent_failure",
+    "lease_expired",
+]
+
+ProcessingAttemptErrorSummary: TypeAlias = Literal[
+    "Retryable processing failure",
+    "Permanent processing failure",
+    "Processing lease expired",
+]
+
 EventType = Annotated[
     str,
     Field(
@@ -92,4 +105,29 @@ class EventHistoryResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class EventProcessingAttemptItem(BaseModel):
+    id: UUID
+    attempt_number: int
+    started_at: AwareDatetime
+    finished_at: AwareDatetime | None
+    outcome: ProcessingAttemptOutcome | None
+    error_summary: ProcessingAttemptErrorSummary | None
+
+
+class EventProcessingAttemptResponse(BaseModel):
+    event_id: UUID
+    items: list[EventProcessingAttemptItem]
+    total: int
+    limit: int
+    offset: int
+
+
+class EventManualRetryResponse(BaseModel):
+    event_id: UUID
+    retry_request_id: UUID
+    status: Literal["accepted"]
+    target_attempt_number: Annotated[int, Field(gt=0)]
+    accepted_at: AwareDatetime
 

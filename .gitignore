@@ -15,6 +15,7 @@ dist/
 .env.*
 !.env.example
 !.env.test.example
+!.env.delivery.example
 
 # Test and coverage caches
 .pytest_cache/

@@ -22,6 +22,7 @@ from app.models import (
 from app.services.order_handler import HandlerOptions
 from app.services.processing import (
     claim_next_event,
+    fail_one_exhausted_pending_event,
     finalize_order_success,
     process_claim,
     recover_one_expired_event,
@@ -91,10 +92,10 @@ def pg_engine() -> Generator[Engine, None, None]:
                 revision = connection.scalar(
                     text("SELECT version_num FROM alembic_version")
                 )
-                if revision != "b87f4d92c1a6":
+                if revision != "d4e5f6a7b8c9":
                     pytest.fail(
                         "Isolated PostgreSQL test database is not migrated to "
-                        "worker schema revision b87f4d92c1a6."
+                        "worker schema revision d4e5f6a7b8c9."
                     )
         except (RuntimeError, SQLAlchemyError):
             pytest.fail(
@@ -159,6 +160,7 @@ def create_event(
     payload: dict | None = None,
     status: str = "pending",
     attempt_count: int = 0,
+    attempt_limit_override: int | None = None,
     next_attempt_at: datetime | None = None,
 ) -> UUID:
     event_id = uuid4()
@@ -176,12 +178,42 @@ def create_event(
             request_hash="0" * 64,
             status=status,
             attempt_count=attempt_count,
+            attempt_limit_override=attempt_limit_override,
         )
         if next_attempt_at is not None:
             event.next_attempt_at = next_attempt_at
         session.add(event)
         session.add(EventStatusHistory(event_id=event_id, status=status))
     return event_id
+
+
+def seed_finished_attempts(
+    context: WorkerIntegrationContext,
+    event_id: UUID,
+    count: int,
+) -> list[UUID]:
+    timestamp = database_now(context)
+    attempt_ids: list[UUID] = []
+    with context.session_factory.begin() as session:
+        for attempt_number in range(1, count + 1):
+            attempt_id = uuid4()
+            attempt_ids.append(attempt_id)
+            started_at = timestamp - timedelta(
+                minutes=count - attempt_number
+            )
+            session.add(
+                EventProcessingAttempt(
+                    id=attempt_id,
+                    event_id=event_id,
+                    attempt_number=attempt_number,
+                    lease_token=uuid4(),
+                    started_at=started_at,
+                    finished_at=started_at + timedelta(seconds=1),
+                    outcome="retryable_failure",
+                    error="Earlier retryable failure",
+                )
+            )
+    return attempt_ids
 
 
 def load_event(context: WorkerIntegrationContext, event_id: UUID) -> Event:
@@ -355,6 +387,216 @@ def test_two_workers_compete_for_one_event(
     assert len(winners) == 1
     assert winners[0].event_id == event_id
     assert len(attempts_for(worker_context, event_id)) == 1
+
+
+def test_override_allows_one_additional_attempt_to_succeed(
+    worker_context: WorkerIntegrationContext,
+) -> None:
+    order_id = f"ORD-{uuid4().hex}"
+    event_id = create_event(
+        worker_context,
+        payload={"order_id": order_id},
+        attempt_count=3,
+        attempt_limit_override=4,
+    )
+    original_attempt_ids = set(seed_finished_attempts(worker_context, event_id, 3))
+    lower_configured_policy = replace(DEFAULT_POLICY, max_attempts=1)
+
+    assert (
+        fail_one_exhausted_pending_event(
+            worker_context.session_factory,
+            lower_configured_policy,
+            source_id=worker_context.source_id,
+        )
+        is None
+    )
+
+    claim = claim_next_event(
+        worker_context.session_factory,
+        lower_configured_policy,
+        source_id=worker_context.source_id,
+    )
+
+    assert claim is not None
+    assert claim.event_id == event_id
+    assert claim.attempt_number == 4
+    result = process_claim(
+        worker_context.session_factory,
+        claim,
+        lower_configured_policy,
+        DEFAULT_HANDLER_OPTIONS,
+    )
+
+    assert result.status == "completed"
+    event = load_event(worker_context, event_id)
+    assert event.status == "completed"
+    assert event.attempt_count == 4
+    assert event.attempt_limit_override == 4
+    attempts = attempts_for(worker_context, event_id)
+    assert [attempt.attempt_number for attempt in attempts] == [1, 2, 3, 4]
+    assert original_attempt_ids <= {attempt.id for attempt in attempts}
+    assert attempts[-1].outcome == "completed"
+
+    with pytest.raises(LeaseOwnershipLost):
+        finalize_order_success(
+            worker_context.session_factory,
+            claim,
+            order_id,
+        )
+
+    with worker_context.session_factory() as session:
+        fulfillment_count = session.scalar(
+            select(func.count())
+            .select_from(OrderFulfillment)
+            .where(OrderFulfillment.first_event_id == event_id)
+        )
+    assert fulfillment_count == 1
+
+
+def test_exhausted_pending_uses_override_when_configuration_is_higher(
+    worker_context: WorkerIntegrationContext,
+) -> None:
+    event_id = create_event(
+        worker_context,
+        attempt_count=4,
+        attempt_limit_override=4,
+    )
+    seed_finished_attempts(worker_context, event_id, 4)
+    higher_configured_policy = replace(DEFAULT_POLICY, max_attempts=100)
+
+    failed_event_id = fail_one_exhausted_pending_event(
+        worker_context.session_factory,
+        higher_configured_policy,
+        source_id=worker_context.source_id,
+    )
+
+    assert failed_event_id == event_id
+    event = load_event(worker_context, event_id)
+    assert event.status == "failed"
+    assert event.attempt_count == 4
+    assert event.attempt_limit_override == 4
+    assert len(attempts_for(worker_context, event_id)) == 4
+
+
+def test_failed_additional_attempt_stops_at_exact_override(
+    worker_context: WorkerIntegrationContext,
+) -> None:
+    event_id = create_event(
+        worker_context,
+        payload={
+            "order_id": f"ORD-{uuid4().hex}",
+            "_demo_failure": "transient_always",
+        },
+        attempt_count=3,
+        attempt_limit_override=4,
+    )
+    original_attempt_ids = set(seed_finished_attempts(worker_context, event_id, 3))
+    higher_configured_policy = replace(DEFAULT_POLICY, max_attempts=100)
+    options = HandlerOptions(failure_simulation_enabled=True)
+
+    claim = claim_next_event(
+        worker_context.session_factory,
+        higher_configured_policy,
+        source_id=worker_context.source_id,
+    )
+    assert claim is not None
+    assert claim.attempt_number == 4
+    result = process_claim(
+        worker_context.session_factory,
+        claim,
+        higher_configured_policy,
+        options,
+    )
+
+    assert result.status == "failed"
+    event = load_event(worker_context, event_id)
+    assert event.status == "failed"
+    assert event.attempt_count == 4
+    attempts = attempts_for(worker_context, event_id)
+    assert len(attempts) == 4
+    assert original_attempt_ids <= {attempt.id for attempt in attempts}
+    assert attempts[-1].outcome == "retryable_failure"
+    assert (
+        claim_next_event(
+            worker_context.session_factory,
+            higher_configured_policy,
+            source_id=worker_context.source_id,
+        )
+        is None
+    )
+
+
+def test_expired_additional_attempt_is_terminal_at_exact_override(
+    worker_context: WorkerIntegrationContext,
+) -> None:
+    event_id = create_event(
+        worker_context,
+        attempt_count=3,
+        attempt_limit_override=4,
+    )
+    seed_finished_attempts(worker_context, event_id, 3)
+    higher_configured_policy = replace(DEFAULT_POLICY, max_attempts=100)
+    claim = claim_next_event(
+        worker_context.session_factory,
+        higher_configured_policy,
+        source_id=worker_context.source_id,
+    )
+    assert claim is not None
+    assert claim.attempt_number == 4
+    expire_lease(worker_context, event_id)
+
+    recovery = recover_one_expired_event(
+        worker_context.session_factory,
+        higher_configured_policy,
+        source_id=worker_context.source_id,
+    )
+
+    assert recovery is not None
+    assert recovery.status == "failed"
+    event = load_event(worker_context, event_id)
+    assert event.status == "failed"
+    assert event.attempt_count == 4
+    assert attempts_for(worker_context, event_id)[-1].outcome == "lease_expired"
+    assert (
+        claim_next_event(
+            worker_context.session_factory,
+            higher_configured_policy,
+            source_id=worker_context.source_id,
+        )
+        is None
+    )
+
+
+def test_two_workers_compete_safely_for_one_overridden_attempt(
+    worker_context: WorkerIntegrationContext,
+) -> None:
+    event_id = create_event(
+        worker_context,
+        attempt_count=3,
+        attempt_limit_override=4,
+    )
+    seed_finished_attempts(worker_context, event_id, 3)
+    barrier = Barrier(2)
+
+    def compete() -> ClaimedEvent | None:
+        barrier.wait(timeout=10)
+        return claim_next_event(
+            worker_context.session_factory,
+            replace(DEFAULT_POLICY, max_attempts=100),
+            source_id=worker_context.source_id,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        claims = list(executor.map(lambda _: compete(), range(2)))
+
+    winners = [claim for claim in claims if claim is not None]
+    assert len(winners) == 1
+    assert winners[0].event_id == event_id
+    assert winners[0].attempt_number == 4
+    assert [
+        attempt.attempt_number
+        for attempt in attempts_for(worker_context, event_id)
+    ] == [1, 2, 3, 4]
 
 
 def test_workers_claim_different_events(

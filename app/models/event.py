@@ -36,6 +36,12 @@ class Event(Base):
             name="attempt_count_nonnegative",
         ),
         CheckConstraint(
+            "attempt_limit_override IS NULL OR ("
+            "attempt_limit_override > 0 "
+            "AND attempt_limit_override >= attempt_count)",
+            name="attempt_limit_override_valid",
+        ),
+        CheckConstraint(
             "(status = 'processing' "
             "AND lease_token IS NOT NULL "
             "AND lease_expires_at IS NOT NULL) "
@@ -81,6 +87,10 @@ class Event(Base):
         nullable=False,
         default=0,
         server_default=text("0"),
+    )
+    attempt_limit_override: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
     )
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     next_attempt_at: Mapped[datetime] = mapped_column(

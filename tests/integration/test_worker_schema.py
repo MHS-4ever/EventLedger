@@ -5,13 +5,18 @@ from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect, select, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.sql.sqltypes import DateTime
 
-from app.models import Event, EventProcessingAttempt, OrderFulfillment
+from app.models import (
+    Event,
+    EventManualRetryRequest,
+    EventProcessingAttempt,
+    OrderFulfillment,
+)
 from scripts.prepare_test_db import (
     create_test_database_engine,
     load_test_database_settings,
@@ -20,7 +25,7 @@ from scripts.prepare_test_db import (
 )
 
 RUN_PG_INTEGRATION = os.getenv("EVENTLEDGER_RUN_PG_INTEGRATION") == "1"
-EXPECTED_REVISION = "b87f4d92c1a6"
+EXPECTED_REVISION = "d4e5f6a7b8c9"
 
 pytestmark = [
     pytest.mark.pg_integration,
@@ -168,6 +173,7 @@ def test_migrated_schema_revision_tables_and_event_columns(
     assert revision == EXPECTED_REVISION
     assert {
         "events",
+        "event_manual_retry_requests",
         "event_status_history",
         "event_processing_attempts",
         "order_fulfillments",
@@ -189,6 +195,15 @@ def test_migrated_schema_revision_tables_and_event_columns(
     assert isinstance(columns["lease_expires_at"]["type"], DateTime)
     assert columns["lease_expires_at"]["type"].timezone
     assert columns["lease_expires_at"]["nullable"]
+    assert columns["attempt_limit_override"]["nullable"]
+
+    existing_values = event_values()
+    db_connection.execute(Event.__table__.insert().values(**existing_values))
+    assert db_connection.scalar(
+        select(Event.attempt_limit_override).where(
+            Event.id == existing_values["id"]
+        )
+    ) is None
 
 
 def test_migrated_event_indexes_and_constraints(
@@ -219,6 +234,7 @@ def test_migrated_event_indexes_and_constraints(
     checks = constraint_map(db_connection, "events")
     assert "ck_events_status_allowed" in checks
     assert "ck_events_attempt_count_nonnegative" in checks
+    assert "ck_events_attempt_limit_override_valid" in checks
     assert "ck_events_lease_state_consistent" in checks
     assert "uq_events_source_id_idempotency_key" in unique_constraint_map(
         db_connection,
@@ -240,6 +256,146 @@ def test_migrated_event_indexes_and_constraints(
     assert "ix_event_status_history_event_id_created_at" in index_by_name(
         db_connection,
         "event_status_history",
+    )
+
+
+def test_migrated_manual_retry_request_table_schema(
+    db_connection: Connection,
+) -> None:
+    inspector = inspect(db_connection)
+    columns = {
+        column["name"]: column
+        for column in inspector.get_columns("event_manual_retry_requests")
+    }
+
+    assert isinstance(columns["id"]["type"], PG_UUID)
+    assert isinstance(columns["event_id"]["type"], PG_UUID)
+    assert not columns["event_id"]["nullable"]
+    assert columns["idempotency_key"]["type"].length == 255
+    assert not columns["idempotency_key"]["nullable"]
+    assert not columns["target_attempt_number"]["nullable"]
+    assert isinstance(columns["accepted_at"]["type"], DateTime)
+    assert columns["accepted_at"]["type"].timezone
+    assert not columns["accepted_at"]["nullable"]
+    assert "now()" in str(columns["accepted_at"]["default"]).lower()
+
+    foreign_keys = {
+        foreign_key["name"]: foreign_key
+        for foreign_key in inspector.get_foreign_keys(
+            "event_manual_retry_requests"
+        )
+    }
+    foreign_key = foreign_keys[
+        "fk_event_manual_retry_requests_event_id_events"
+    ]
+    assert foreign_key["referred_table"] == "events"
+    assert tuple(foreign_key["constrained_columns"]) == ("event_id",)
+
+    unique_constraints = unique_constraint_map(
+        db_connection,
+        "event_manual_retry_requests",
+    )
+    assert unique_constraints[
+        "uq_event_manual_retry_requests_event_id"
+    ] == ("event_id",)
+
+    checks = constraint_map(db_connection, "event_manual_retry_requests")
+    assert (
+        "ck_event_manual_retry_requests_idempotency_key_valid" in checks
+    )
+    assert (
+        "ck_event_manual_retry_requests_target_attempt_number_positive"
+        in checks
+    )
+
+
+def test_manual_retry_constraints_are_enforced(
+    db_connection: Connection,
+) -> None:
+    requests = EventManualRetryRequest.__table__
+    event_id = insert_parent_event(db_connection)
+    db_connection.execute(
+        requests.insert().values(
+            id=uuid4(),
+            event_id=event_id,
+            idempotency_key="retry-request-1",
+            target_attempt_number=1,
+        )
+    )
+
+    assert_integrity_error(
+        db_connection,
+        requests.insert().values(
+            id=uuid4(),
+            event_id=event_id,
+            idempotency_key="retry-request-2",
+            target_attempt_number=2,
+        ),
+    )
+
+    for invalid_key in ("", "contains space", "contains\ttab"):
+        other_event_id = insert_parent_event(db_connection)
+        assert_integrity_error(
+            db_connection,
+            requests.insert().values(
+                id=uuid4(),
+                event_id=other_event_id,
+                idempotency_key=invalid_key,
+                target_attempt_number=1,
+            ),
+        )
+
+    for invalid_target in (0, -1):
+        other_event_id = insert_parent_event(db_connection)
+        assert_integrity_error(
+            db_connection,
+            requests.insert().values(
+                id=uuid4(),
+                event_id=other_event_id,
+                idempotency_key=f"retry-{uuid4().hex}",
+                target_attempt_number=invalid_target,
+            ),
+        )
+
+    assert_integrity_error(
+        db_connection,
+        requests.insert().values(
+            id=uuid4(),
+            event_id=uuid4(),
+            idempotency_key="missing-parent",
+            target_attempt_number=1,
+        ),
+    )
+
+
+def test_event_attempt_limit_override_constraint_is_enforced(
+    db_connection: Connection,
+) -> None:
+    events = Event.__table__
+    for invalid_limit in (0, -1):
+        assert_integrity_error(
+            db_connection,
+            events.insert().values(
+                **event_values(),
+                attempt_limit_override=invalid_limit,
+            ),
+        )
+
+    values = event_values()
+    values["attempt_count"] = 3
+    assert_integrity_error(
+        db_connection,
+        events.insert().values(
+            **values,
+            attempt_limit_override=2,
+        ),
+    )
+
+    db_connection.execute(
+        events.insert().values(
+            **event_values(),
+            attempt_limit_override=1,
+        )
     )
 
 

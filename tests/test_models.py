@@ -4,6 +4,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from app.db.base import Base
 from app.models import (
     Event,
+    EventManualRetryRequest,
     EventProcessingAttempt,
     EventStatusHistory,
     OrderFulfillment,
@@ -12,6 +13,9 @@ from app.models import (
 
 def test_model_tables_are_registered() -> None:
     assert Event.__table__ is Base.metadata.tables["events"]
+    assert EventManualRetryRequest.__table__ is Base.metadata.tables[
+        "event_manual_retry_requests"
+    ]
     assert EventStatusHistory.__table__ is Base.metadata.tables[
         "event_status_history"
     ]
@@ -43,6 +47,11 @@ def test_event_constraints_and_index() -> None:
     assert ("source_id", "idempotency_key") in unique_columns
     assert any("status IN" in expression for expression in check_expressions)
     assert "attempt_count >= 0" in check_expressions
+    assert any(
+        "attempt_limit_override > 0" in expression
+        and "attempt_limit_override >= attempt_count" in expression
+        for expression in check_expressions
+    )
     assert any(
         "lease_token IS NOT NULL" in expression
         and "lease_expires_at IS NOT NULL" in expression
@@ -78,6 +87,7 @@ def test_event_important_columns() -> None:
     assert columns.request_hash.type.length == 64
     assert not columns.status.nullable
     assert not columns.attempt_count.nullable
+    assert columns.attempt_limit_override.nullable
     assert columns.last_error.nullable
     assert columns.next_attempt_at.type.timezone
     assert not columns.next_attempt_at.nullable
@@ -114,6 +124,41 @@ def test_event_history_columns_constraints_and_index() -> None:
     assert table.c.created_at.type.timezone
     assert table.c.created_at.server_default is not None
     assert ("event_id", "created_at") in index_columns
+
+
+def test_manual_retry_request_columns_and_constraints() -> None:
+    table = EventManualRetryRequest.__table__
+    columns = table.c
+    foreign_key = next(iter(columns.event_id.foreign_keys))
+    unique_columns = {
+        tuple(column.name for column in constraint.columns)
+        for constraint in table.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+    check_expressions = {
+        str(constraint.sqltext)
+        for constraint in table.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+
+    assert columns.id.primary_key
+    assert isinstance(columns.id.type, PG_UUID)
+    assert isinstance(columns.event_id.type, PG_UUID)
+    assert not columns.event_id.nullable
+    assert foreign_key.target_fullname == "events.id"
+    assert columns.idempotency_key.type.length == 255
+    assert not columns.idempotency_key.nullable
+    assert not columns.target_attempt_number.nullable
+    assert columns.accepted_at.type.timezone
+    assert not columns.accepted_at.nullable
+    assert columns.accepted_at.server_default is not None
+    assert ("event_id",) in unique_columns
+    assert any(
+        "char_length(idempotency_key) BETWEEN 1 AND 255" in expression
+        and "idempotency_key !~ '[[:space:]]'" in expression
+        for expression in check_expressions
+    )
+    assert "target_attempt_number > 0" in check_expressions
 
 
 def test_processing_attempt_columns_constraints_and_indexes() -> None:

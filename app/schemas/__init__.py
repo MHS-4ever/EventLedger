@@ -7,8 +7,14 @@ from app.schemas.event import (
     EventHistoryResponse,
     EventListItem,
     EventListResponse,
+    EventManualRetryResponse,
+    EventProcessingAttemptItem,
+    EventProcessingAttemptResponse,
     EventResponse,
     EventStatus,
+    EventType,
+    ProcessingAttemptErrorSummary,
+    ProcessingAttemptOutcome,
 )
 
 __all__ = [
@@ -18,7 +24,13 @@ __all__ = [
     "EventHistoryResponse",
     "EventListItem",
     "EventListResponse",
+    "EventManualRetryResponse",
+    "EventProcessingAttemptItem",
+    "EventProcessingAttemptResponse",
     "EventResponse",
     "EventStatus",
+    "EventType",
+    "ProcessingAttemptErrorSummary",
+    "ProcessingAttemptOutcome",
 ]
 

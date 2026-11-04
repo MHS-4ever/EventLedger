@@ -328,6 +328,89 @@ def test_invalid_status_filter_is_rejected(
     assert session.items_statements == []
 
 
+def test_date_filters_apply_to_count_and_items_queries(
+    install_listing_session: Callable[[ListingFakeSession], None],
+) -> None:
+    session = ListingFakeSession(total=0)
+    install_listing_session(session)
+
+    response = client.get(
+        "/v1/events",
+        params={
+            "created_from": "2026-11-04T10:00:00+05:00",
+            "created_to": "2026-11-04T06:00:00Z",
+        },
+        headers={"X-API-Key": TEST_API_KEY},
+    )
+
+    assert response.status_code == 200
+    expected_from = datetime(2026, 11, 4, 10, tzinfo=timezone(timedelta(hours=5)))
+    expected_to = datetime(2026, 11, 4, 6, tzinfo=timezone.utc)
+    assert expected_from in compiled_parameters(session.count_statements[0])
+    assert expected_to in compiled_parameters(session.count_statements[0])
+    assert expected_from in compiled_parameters(session.items_statements[0])
+    assert expected_to in compiled_parameters(session.items_statements[0])
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"created_from": "2026-11-04T10:00:00"},
+        {"created_to": "not-a-timestamp"},
+        {
+            "created_from": "2026-11-04T10:00:00Z",
+            "created_to": "2026-11-04T10:00:00+00:00",
+        },
+        {
+            "created_from": "2026-11-04T11:00:00Z",
+            "created_to": "2026-11-04T10:00:00Z",
+        },
+        {
+            "created_from": "2026-11-04T10:00:00+05:00",
+            "created_to": "2026-11-04T05:00:00Z",
+        },
+    ],
+)
+def test_invalid_date_filters_are_rejected_before_database_access(
+    parameters: dict[str, str],
+    install_listing_session: Callable[[ListingFakeSession], None],
+) -> None:
+    session = ListingFakeSession()
+    install_listing_session(session)
+
+    response = client.get(
+        "/v1/events",
+        params=parameters,
+        headers={"X-API-Key": TEST_API_KEY},
+    )
+
+    assert response.status_code == 422
+    assert session.count_statements == []
+    assert session.items_statements == []
+
+
+@pytest.mark.parametrize(
+    "event_type",
+    ["", "Order.Created", "order_created", "order..created", "a" * 101],
+)
+def test_invalid_event_type_filter_is_rejected(
+    event_type: str,
+    install_listing_session: Callable[[ListingFakeSession], None],
+) -> None:
+    session = ListingFakeSession()
+    install_listing_session(session)
+
+    response = client.get(
+        "/v1/events",
+        params={"event_type": event_type},
+        headers={"X-API-Key": TEST_API_KEY},
+    )
+
+    assert response.status_code == 422
+    assert session.count_statements == []
+    assert session.items_statements == []
+
+
 def test_ordering_is_created_at_then_id_descending(
     install_listing_session: Callable[[ListingFakeSession], None],
 ) -> None:

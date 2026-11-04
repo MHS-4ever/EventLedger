@@ -1,141 +1,228 @@
 # EventLedger
 
-EventLedger is a reliable webhook and event-processing backend built with Python and FastAPI. This initial phase provides a minimal API with a health-check endpoint.
+EventLedger is a PostgreSQL-backed webhook ingestion and event-processing service built with FastAPI. It accepts source-authenticated events, detects source-scoped duplicates, processes work in an independent worker, records status and attempt history, and recovers work whose processing lease expires.
+
+The repository demonstrates reliability patterns for a database-backed worker. It does not claim exactly-once execution, guaranteed eventual success, or production cloud deployment.
+
+## Problem
+
+Webhook receivers need to acknowledge durable ingestion quickly while handling duplicate requests, transient failures, worker crashes, and concurrent consumers. Performing the business operation in the HTTP request makes those concerns difficult to isolate. EventLedger instead persists an event first and lets independent workers claim and process it under PostgreSQL transactions.
+
+## Implemented capabilities
+
+- API-key authentication mapped to a server-configured source identity.
+- Durable event ingestion with source-scoped idempotency keys.
+- Source-isolated event detail, listing, filtering, status history, and attempt history.
+- Atomic worker claims using row locks and `FOR UPDATE SKIP LOCKED`.
+- Processing leases, expired-lease recovery, and lease-token fencing.
+- Bounded exponential retry scheduling and permanent-failure handling.
+- Transactional, source-scoped order-fulfillment uniqueness.
+- One auditable manual retry grant for eligible terminal failures.
+- PostgreSQL migrations, isolated integration tests, and Docker delivery services for the database, migration job, API, and worker.
+- Separate process liveness and database/schema readiness endpoints.
+
+Future operational work includes TLS termination, rate limiting, key rotation, a production secret manager, backups, monitoring and alerting, lease heartbeats, and cloud orchestration. See [Reliability and security](docs/RELIABILITY_AND_SECURITY.md) for the complete boundary.
+
+## Technology
+
+- Python 3.12 in the delivery image; package metadata supports Python 3.11 or newer
+- FastAPI and Pydantic
+- SQLAlchemy 2 and psycopg 3
+- PostgreSQL 18
+- Alembic
+- pytest
+- Docker Compose
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Client[Webhook producer] -->|X-API-Key and Idempotency-Key| API[FastAPI API]
+    API -->|ingest and query| DB[(PostgreSQL 18)]
+    Worker[Independent worker] -->|claim, recover, finalize| DB
+    Worker --> Handler[Order handler]
+    Handler -->|transactional fulfillment| DB
+    Migrate[One-shot Alembic service] --> DB
+    DB -->|healthy| Migrate
+    Migrate -->|completed successfully| API
+    Migrate -->|completed successfully| Worker
+```
+
+The API and worker share no in-memory queue. PostgreSQL is the durable queue, coordination point, audit store, and local business-state store. More detailed component, sequence, and data-model diagrams are in [Architecture](docs/ARCHITECTURE.md).
+
+## Event lifecycle
+
+1. The API authenticates `X-API-Key` and derives `source_id` from server configuration.
+2. `POST /v1/events` atomically inserts a `pending` event under the unique `(source_id, idempotency_key)` constraint.
+3. A worker transaction locks one eligible row, increments its monotonic attempt number, creates an attempt row, assigns a lease token, and changes the event to `processing`.
+4. The handler runs outside that claim transaction.
+5. A separate fenced transaction records completion, a retryable failure, or a permanent failure.
+6. An expired lease is finalized as `lease_expired`; the event is either scheduled again or terminally failed at its effective attempt limit.
+7. An eligible failed event may receive one manual grant for exactly one additional attempt.
+
+Event status is one of `pending`, `processing`, `completed`, or `failed`. Attempt outcome is one of `completed`, `retryable_failure`, `permanent_failure`, or `lease_expired`.
+
+## API reference
+
+All `/v1` endpoints require `X-API-Key`. Missing and invalid keys return `401`. Event resources are always scoped to the authenticated source; a missing event and an event owned by another source both return `404`.
+
+| Method and path | Purpose | Important inputs | Success response |
+|---|---|---|---|
+| `GET /health` | Process liveness | None | `200 {"status":"ok"}` |
+| `GET /ready` | Database connectivity and current Alembic revision | None | `200 {"status":"ready"}` or safe `503` |
+| `GET /v1/auth/check` | Verify API key and mapped source | `X-API-Key` | `200` with `source_id` |
+| `POST /v1/events` | Ingest an event | `X-API-Key`, `Idempotency-Key`, JSON body | `201`; identical replay `200` |
+| `GET /v1/events` | List source-owned events | Optional `status`, `event_type`, `created_from`, `created_to`, `limit`, `offset` | Paginated `200` |
+| `GET /v1/events/{event_id}` | Get event detail and payload | UUID path | `200` or `404` |
+| `GET /v1/events/{event_id}/history` | Get status transitions, oldest first | `limit` 1-100, `offset` at least 0 | Paginated `200` |
+| `GET /v1/events/{event_id}/attempts` | Get safe attempt history, newest attempt first | `limit` 1-100, `offset` at least 0 | Paginated `200` |
+| `POST /v1/events/{event_id}/retry` | Authorize one eligible manual retry | `X-API-Key`, retry-resource `Idempotency-Key` | `202`; identical replay `200` |
+
+Event-list ordering is deterministic: `created_at DESC, id DESC`. `created_from` is inclusive, `created_to` is exclusive, both must be timezone-aware, and a supplied range must have `created_from < created_to`. Invalid query data returns `422`.
+
+### Ingest an event
+
+```powershell
+$headers = @{
+    "X-API-Key" = $apiKey
+    "Idempotency-Key" = ([guid]::NewGuid().ToString("N"))
+}
+$body = @{
+    event_type = "order.created"
+    payload = @{ order_id = "ORDER-1001" }
+} | ConvertTo-Json -Depth 5
+
+$event = Invoke-RestMethod `
+    -Method Post `
+    -Uri "http://127.0.0.1:8001/v1/events" `
+    -Headers $headers `
+    -ContentType "application/json" `
+    -Body $body
+```
+
+`event_type` is 1-100 characters in lowercase dotted form such as `order.created`. The request body cannot supply `source_id`; authentication determines it.
+
+## Idempotency
+
+Ingestion keys are 1-255 non-whitespace characters and are unique per authenticated source. Reusing a key with the same canonical `event_type` and payload returns the stored event with `200` and `X-Idempotent-Replay: true`. Reusing it for different content returns `409 idempotency_key_conflict`.
+
+Manual-retry keys use the same length limit and are scoped to the individual event retry resource. The first eligible request returns `202`. Replaying its key returns the original stored acceptance with `200` and `X-Idempotent-Replay: true`, even if processing has since changed the event. A different key cannot create a second grant and returns `409 manual_retry_limit_reached`.
+
+## Claims, leases, and retries
+
+Workers select eligible events in `next_attempt_at` order and use row-level `FOR UPDATE SKIP LOCKED` locks so concurrent workers do not wait on the same claim. Claiming commits the attempt number, attempt row, lease token, expiry, and `processing` history before handler execution begins.
+
+Finalization locks both the event and active attempt and checks the lease token, state, and expiry. A stale worker cannot finalize after ownership is lost. There is currently no lease heartbeat, so handler execution must finish within the configured lease duration.
+
+Retryable failures use bounded exponential scheduling up to `WORKER_MAX_ATTEMPTS`. Permanent failures stop immediately. When the effective limit is reached, the event becomes `failed`. An eligible failed event whose latest attempt was `retryable_failure` or `lease_expired` may receive one manual grant. The grant stores an exact per-event attempt limit of `attempt_count + 1`; it never resets attempt numbering or deletes history.
 
 ## Local development
 
-Python 3.11 or newer is required. In PowerShell, run:
+Requirements: Python 3.11 or newer, PostgreSQL 18, and Docker Desktop if using the supplied database service.
 
 ```powershell
-py -m venv .venv
+py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
+Copy-Item .env.example .env
 ```
 
-Start the development server:
+Replace all placeholders in `.env`, then start only the development database and apply migrations:
+
+```powershell
+docker compose --env-file .env up -d db
+python -m alembic upgrade head
+```
+
+Run API and worker in separate terminals:
 
 ```powershell
 python -m uvicorn app.main:app --reload
+python -m app.worker --log-level INFO
 ```
 
-The health endpoint is available at `http://127.0.0.1:8000/health`.
+The development API defaults to `http://127.0.0.1:8000`. Do not point development commands at the isolated integration-test database.
 
-Run the tests:
+## Docker delivery quickstart
+
+The delivery stack publishes only the API at `127.0.0.1:8001`; PostgreSQL remains internal to the Compose network.
 
 ```powershell
-python -m pytest
+Copy-Item .env.delivery.example .env.delivery
+# Replace every CHANGE_ME value without committing the file.
+$compose = @(
+    "--project-name", "eventledger-d3demo",
+    "--env-file", ".env.delivery",
+    "-f", "compose.delivery.yaml"
+)
+docker compose @compose config --quiet
+docker compose @compose build
+docker compose @compose up -d
+docker compose @compose ps -a
 ```
 
-## Day 2 worker architecture
+Compose waits for PostgreSQL health, runs the one-shot migration service, and starts the API and worker only after migration succeeds. The regular worker is forced to use `WORKER_FAILURE_SIMULATION_ENABLED=false`.
 
-Event ingestion and processing are deliberately separate. FastAPI authenticates,
-validates, and durably stores events as `pending`; it never waits for a business
-handler. A standalone synchronous worker uses PostgreSQL as the durable queue:
+Stop without deleting persistent data:
 
 ```powershell
-python -m app.worker
+docker compose @compose stop
 ```
 
-For debugging, `--once` performs one maintenance cycle (at most one expired-lease
-recovery and one exhausted-pending transition) and processes at most one newly
-claimed event before exiting:
+Do not use `down -v` for a delivery project whose data must be retained. The complete verified workflow is in [Day 3 manual testing](MANUAL_TESTING_DAY3.md).
+
+## Migrations
+
+The current Alembic head is `d4e5f6a7b8c9`.
 
 ```powershell
-python -m app.worker --once
+# Local environment
+python -m alembic current
+python -m alembic upgrade head
+
+# Delivery project, explicit one-shot job
+docker compose @compose run --rm migrate
 ```
 
-The worker claims one due event in a short transaction using `FOR UPDATE SKIP
-LOCKED`. That transaction changes the event to `processing`, increments its
-durable attempt count, assigns a fresh lease token and expiry, and inserts both
-an attempt record and processing-history row. It commits before handler code
-runs, so multiple processes may compete safely without holding database locks
-during business processing.
+Do not run downgrades against a database containing data that must be preserved.
 
-Every success, failure, and recovery transaction locks the event and verifies
-the exact lease token. Finalization also verifies lease validity using
-PostgreSQL `clock_timestamp()`. A stale or over-time worker cannot complete the
-event or write fulfillment state. There is intentionally no lease heartbeat:
-handlers must finish within the configured lease, and an over-time handler is
-fenced out and recovered later.
+## Health and readiness
 
-Expired claims are recovered with `SKIP LOCKED`. The abandoned attempt is closed
-as `lease_expired`. If the configured total-attempt budget remains, the event is
-returned to `pending` with a durable retry time; otherwise it becomes `failed`.
-Recovery itself does not increment `attempt_count`. A new count is consumed only
-when a later claim commits.
+- `GET /health` proves the API process can serve a request. It does not access PostgreSQL.
+- `GET /ready` executes a database query and requires the database's `alembic_version` to equal the single migration head packaged in the image. It returns only `{"status":"not_ready"}` on failure and does not expose database errors or credentials.
 
-Retryable failures use deterministic capped exponential backoff. With the
-defaults, attempt 1 retries after 2 seconds, attempt 2 after 4 seconds, and three
-total claims are permitted. Permanent contract failures—such as an unsupported
-event type or invalid `order_id`—become terminal immediately.
+## Tests
 
-### Worker settings
+Regular tests use mocks or test-local overrides and do not opt into the real PostgreSQL suite:
 
-All settings are optional and validated:
+```powershell
+.\.venv\Scripts\python.exe -m pytest -m "not pg_integration"
+```
 
-| Environment variable | Default | Meaning |
-|---|---:|---|
-| `WORKER_POLL_INTERVAL_SECONDS` | `1` | Empty-queue/database-error poll delay |
-| `WORKER_LEASE_DURATION_SECONDS` | `30` | Processing lease duration |
-| `WORKER_MAX_ATTEMPTS` | `3` | Total claims, including the first |
-| `WORKER_RETRY_BASE_SECONDS` | `2` | First retry delay |
-| `WORKER_RETRY_MAX_SECONDS` | `60` | Backoff cap |
-| `WORKER_IDENTIFIER` | generated | Optional log identity |
-| `WORKER_FAILURE_SIMULATION_ENABLED` | `false` | Enables demo-only payload controls |
-| `WORKER_SIMULATION_MAX_SLOW_SECONDS` | `30` | Upper bound for simulated slow work |
+PostgreSQL integration tests are guarded to accept only the dedicated local `eventledger_test` database, user, and port `5433`:
 
-Changing `WORKER_MAX_ATTEMPTS` affects already queued events because the limit is
-worker configuration, while each event's consumed count is durable. Lowering it
-can cause an already-exhausted pending event to be terminally failed.
+```powershell
+Copy-Item .env.test.example .env.test
+# Replace the test password placeholder in .env.test.
+docker compose --env-file .env.test -f compose.test.yaml up -d db-test
+.\.venv\Scripts\python.exe -m scripts.prepare_test_db
+$env:EVENTLEDGER_RUN_PG_INTEGRATION = "1"
+.\.venv\Scripts\python.exe -m pytest -m pg_integration
+Remove-Item Env:EVENTLEDGER_RUN_PG_INTEGRATION
+```
 
-### Demonstration fulfillment
+As of 2026-11-04, the complete combined Python 3.12 run reported **271 passing tests**, including tests against the guarded local PostgreSQL integration database. On the same date, the isolated `eventledger-d3demo` Docker acceptance run passed authentication, ingestion and retry idempotency, filtering, automatic and manual retries, lease-expiry recovery, fulfillment uniqueness, persistence, readiness, and fresh-volume startup. These are recorded observations, not performance benchmarks or cloud-deployment evidence.
 
-The only supported handler is `order.created`. It requires
-`payload.order_id` to be a nonempty string of at most 255 characters without
-surrounding Unicode whitespace. Generic ingestion remains generic; this contract
-is checked by the worker.
+## Security and delivery guarantees
 
-Fulfillment identity is exactly `(source_id, order_id)`, where `source_id` comes
-from the trusted event row. Different incoming idempotency keys may create
-different events for the same business order, but PostgreSQL stores only one
-fulfillment and preserves its `first_event_id`. Another source may independently
-use the same `order_id`.
+EventLedger provides durable local ingestion, atomic database claims, bounded retries, expired-lease recovery, stale-worker fencing, and PostgreSQL-enforced local fulfillment uniqueness. Handler code can execute more than once, and an external side effect cannot be made exactly-once by this database transaction alone. Exhausting bounded attempts can leave an event failed; eventual success is not guaranteed.
 
-Claims are persisted and can be recovered after lease expiry. A handler may
-execute more than once after failures or expired leases, but the retry budget is
-bounded: repeated crashes or errors can make an event terminally fail. A
-completed fulfillment row is transactionally idempotent inside this PostgreSQL
-database. This does not guarantee exactly-once external side effects or eventual
-success. No payment, shipping, email, or other external operation is performed.
+The current authentication model is one static configured API key mapped to one source. It has no operator role, key rotation, TLS termination, or edge controls. Idempotency keys are stored in plaintext. Review [Reliability and security](docs/RELIABILITY_AND_SECURITY.md) before evaluating deployment suitability.
 
-### Failure simulation
+## Documentation
 
-Failure simulation must never be enabled in production. The worker emits a
-startup warning whenever it is enabled.
-
-Simulation fields have no effect unless
-`WORKER_FAILURE_SIMULATION_ENABLED=true`:
-
-- `_demo_failure: "transient_once"` fails attempt 1, then succeeds.
-- `_demo_failure: "transient_always"` exhausts the retry budget.
-- `_demo_failure: "permanent"` fails immediately.
-- `_demo_failure: "slow"` sleeps on every attempt.
-- `_demo_failure: "slow_once"` sleeps only on attempt 1, which supports a
-  crash-recovery-then-success demonstration.
-- Both slow modes use the bounded numeric
-  `_demo_slow_seconds` value.
-
-Simulation uses the durable attempt number and stores no in-memory counters.
-
-Ctrl+C or a supported termination signal stops new claims after the current
-bounded operation. A forced kill cannot run cleanup; its committed claim remains
-`processing` until lease recovery.
-
-Status transitions remain available through the existing history API. Internal
-attempt records live in `event_processing_attempts`, and database-only business
-state lives in `order_fulfillments`; neither exposes lease tokens or errors in a
-public endpoint.
-
-See `MANUAL_TESTING_DAY2.md` for guarded migration, integration-test, concurrency,
-retry, and crash-recovery procedures.
+- [Architecture](docs/ARCHITECTURE.md)
+- [Reliability and security](docs/RELIABILITY_AND_SECURITY.md)
+- [Day 3 demonstration and manual testing](MANUAL_TESTING_DAY3.md)
+- [Project summary](docs/PROJECT_SUMMARY.md)

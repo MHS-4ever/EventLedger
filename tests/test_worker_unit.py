@@ -11,11 +11,17 @@ from pytest import MonkeyPatch
 
 import app.worker as worker_module
 from app.core.config import Settings
+from app.models import Event
 from app.services.order_handler import HandlerOptions, validate_order_created
-from app.services.processing import process_claim, sanitize_error
+from app.services.processing import (
+    effective_attempt_limit,
+    process_claim,
+    sanitize_error,
+)
 from app.services.processing_errors import (
     LeaseOwnershipLost,
     PermanentFailure,
+    ProcessingStateError,
     RetryableFailure,
 )
 from app.services.processing_types import (
@@ -54,6 +60,36 @@ def make_claim(
         lease_token=lease_token,
         lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=1),
     )
+
+
+def test_effective_attempt_limit_uses_override_exactly() -> None:
+    policy = ProcessingPolicy(30, 3, 2, 8)
+    ordinary_event = Event(attempt_count=2)
+    overridden_event = Event(attempt_count=3, attempt_limit_override=4)
+
+    assert effective_attempt_limit(ordinary_event, policy) == 3
+    assert effective_attempt_limit(overridden_event, policy) == 4
+    assert effective_attempt_limit(
+        overridden_event,
+        ProcessingPolicy(30, 100, 2, 8),
+    ) == 4
+
+
+@pytest.mark.parametrize(
+    ("attempt_count", "override"),
+    [(0, 0), (3, 2)],
+)
+def test_effective_attempt_limit_rejects_malformed_override(
+    attempt_count: int,
+    override: int,
+) -> None:
+    event = Event(
+        attempt_count=attempt_count,
+        attempt_limit_override=override,
+    )
+
+    with pytest.raises(ProcessingStateError, match="override is invalid"):
+        effective_attempt_limit(event, ProcessingPolicy(30, 3, 2, 8))
 
 
 def test_worker_import_does_not_import_fastapi_application() -> None:

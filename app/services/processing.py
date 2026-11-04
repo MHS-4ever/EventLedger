@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models import (
     Event,
@@ -39,6 +40,21 @@ def sanitize_error(message: str) -> str:
     if not normalized:
         return "Processing failed"
     return normalized[:MAX_PERSISTED_ERROR_LENGTH]
+
+
+def effective_attempt_limit(event: Event, policy: ProcessingPolicy) -> int:
+    limit = event.attempt_limit_override
+    if limit is None:
+        return policy.max_attempts
+    if limit < 1 or limit < event.attempt_count:
+        raise ProcessingStateError("Event attempt limit override is invalid")
+    return limit
+
+
+def _effective_attempt_limit_expression(
+    policy: ProcessingPolicy,
+) -> ColumnElement[int]:
+    return func.coalesce(Event.attempt_limit_override, policy.max_attempts)
 
 
 def _database_now(session: Session) -> datetime:
@@ -113,7 +129,7 @@ def claim_next_event(
         filters = [
             Event.status == "pending",
             Event.next_attempt_at <= func.clock_timestamp(),
-            Event.attempt_count < policy.max_attempts,
+            Event.attempt_count < _effective_attempt_limit_expression(policy),
         ]
         if source_id is not None:
             filters.append(Event.source_id == source_id)
@@ -126,6 +142,10 @@ def claim_next_event(
         )
         if event is None:
             return None
+
+        attempt_limit = effective_attempt_limit(event, policy)
+        if event.attempt_count >= attempt_limit:
+            raise ProcessingStateError("Claimed event has exhausted its attempt limit")
 
         database_now = _database_now(session)
         lease_token = uuid4()
@@ -240,7 +260,7 @@ def recover_one_expired_event(
             attempt.outcome = "lease_expired"
             attempt.error = error
 
-            if event.attempt_count < policy.max_attempts:
+            if event.attempt_count < effective_attempt_limit(event, policy):
                 next_status = "pending"
                 event.next_attempt_at = database_now + timedelta(
                     seconds=policy.retry_delay_seconds(event.attempt_count)
@@ -294,7 +314,7 @@ def fail_one_exhausted_pending_event(
     with session_factory.begin() as session:
         filters = [
             Event.status == "pending",
-            Event.attempt_count >= policy.max_attempts,
+            Event.attempt_count >= _effective_attempt_limit_expression(policy),
         ]
         if source_id is not None:
             filters.append(Event.source_id == source_id)
@@ -307,6 +327,8 @@ def fail_one_exhausted_pending_event(
         )
         if event is None:
             return None
+
+        effective_attempt_limit(event, policy)
 
         database_now = _database_now(session)
         error = "Maximum processing attempts exhausted"
@@ -406,7 +428,10 @@ def finalize_processing_failure(
         attempt.outcome = "retryable_failure" if retryable else "permanent_failure"
         attempt.error = error
 
-        if retryable and event.attempt_count < policy.max_attempts:
+        if retryable and event.attempt_count < effective_attempt_limit(
+            event,
+            policy,
+        ):
             next_status = "pending"
             event.next_attempt_at = database_now + timedelta(
                 seconds=policy.retry_delay_seconds(event.attempt_count)
