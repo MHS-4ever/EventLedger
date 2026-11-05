@@ -7,6 +7,7 @@ from uuid import uuid4
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import Settings, settings
+from app.db.compatibility import check_schema_compatibility
 from app.db.session import SessionLocal, engine
 from app.services.order_handler import HandlerOptions
 from app.services.processing import run_worker_cycle
@@ -14,6 +15,8 @@ from app.services.processing_errors import ProcessingStateError
 from app.services.processing_types import ProcessingPolicy, WorkerCycleResult
 
 logger = logging.getLogger(__name__)
+
+WORKER_SCHEMA_PREFLIGHT_EXIT_CODE = 2
 
 
 def build_policy(worker_settings: Settings) -> ProcessingPolicy:
@@ -61,6 +64,35 @@ def _log_cycle(result: WorkerCycleResult, worker_id: str) -> None:
         )
 
 
+def _schema_preflight(worker_id: str) -> bool:
+    try:
+        with SessionLocal() as session:
+            compatibility = check_schema_compatibility(session)
+    except Exception as error:
+        logger.error(
+            "worker_schema_preflight_failed worker_id=%s error_type=%s",
+            worker_id,
+            type(error).__name__,
+        )
+        return False
+
+    if not compatibility.compatible:
+        logger.error(
+            "worker_schema_incompatible worker_id=%s mode=%s reason=%s",
+            worker_id,
+            compatibility.mode,
+            compatibility.reason,
+        )
+        return False
+
+    logger.info(
+        "worker_schema_compatible worker_id=%s mode=%s",
+        worker_id,
+        compatibility.mode,
+    )
+    return True
+
+
 def run_worker(*, once: bool = False) -> int:
     worker_id = settings.worker_identifier or f"worker-{uuid4().hex[:12]}"
     policy = build_policy(settings)
@@ -80,21 +112,26 @@ def run_worker(*, once: bool = False) -> int:
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, request_stop)
 
-    logger.info(
-        "worker_started worker_id=%s once=%s max_attempts=%s lease_seconds=%s",
-        worker_id,
-        once,
-        policy.max_attempts,
-        policy.lease_duration_seconds,
-    )
-    if handler_options.failure_simulation_enabled:
-        logger.warning(
-            "worker_failure_simulation_enabled worker_id=%s "
-            "production_safe=false message='Failure simulation must not be "
-            "enabled in production'",
-            worker_id,
-        )
     try:
+        if not _schema_preflight(worker_id):
+            return WORKER_SCHEMA_PREFLIGHT_EXIT_CODE
+
+        logger.info(
+            "worker_started worker_id=%s once=%s max_attempts=%s "
+            "lease_seconds=%s",
+            worker_id,
+            once,
+            policy.max_attempts,
+            policy.lease_duration_seconds,
+        )
+        if handler_options.failure_simulation_enabled:
+            logger.warning(
+                "worker_failure_simulation_enabled worker_id=%s "
+                "production_safe=false message='Failure simulation must not be "
+                "enabled in production'",
+                worker_id,
+            )
+
         while not stop_requested.is_set():
             try:
                 result = run_worker_cycle(SessionLocal, policy, handler_options)

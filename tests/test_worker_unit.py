@@ -327,6 +327,7 @@ def test_worker_warns_when_failure_simulation_is_enabled(
         "run_worker_cycle",
         lambda *args, **kwargs: WorkerCycleResult(None, None, None),
     )
+    monkeypatch.setattr(worker_module, "_schema_preflight", lambda *args: True)
     monkeypatch.setattr(worker_module.signal, "signal", lambda *args: None)
     monkeypatch.setattr(worker_module.engine, "dispose", lambda: None)
     caplog.set_level(logging.WARNING, logger="app.worker")
@@ -340,6 +341,61 @@ def test_worker_warns_when_failure_simulation_is_enabled(
     )
     assert "simulation-test" in warning.getMessage()
     assert "must not be enabled in production" in warning.getMessage()
+
+
+def test_worker_rejects_incompatible_schema_before_polling(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    disposed: list[bool] = []
+    installed_signals: list[object] = []
+    monkeypatch.setattr(worker_module, "_schema_preflight", lambda *args: False)
+    monkeypatch.setattr(
+        worker_module,
+        "run_worker_cycle",
+        lambda *args, **kwargs: pytest.fail("worker must not poll"),
+    )
+    monkeypatch.setattr(
+        worker_module.signal,
+        "signal",
+        lambda signum, handler: installed_signals.append(signum),
+    )
+    monkeypatch.setattr(
+        worker_module.engine,
+        "dispose",
+        lambda: disposed.append(True),
+    )
+
+    assert run_worker(once=True) == worker_module.WORKER_SCHEMA_PREFLIGHT_EXIT_CODE
+    assert disposed == [True]
+    assert worker_module.signal.SIGINT in installed_signals
+    if hasattr(worker_module.signal, "SIGTERM"):
+        assert worker_module.signal.SIGTERM in installed_signals
+
+
+def test_worker_schema_preflight_sanitizes_database_failure(
+    monkeypatch: MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret = "password=must-not-leak"
+
+    class SessionContext:
+        def __enter__(self) -> object:
+            return object()
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+    def fail_check(session: object) -> object:
+        del session
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(worker_module, "SessionLocal", SessionContext)
+    monkeypatch.setattr(worker_module, "check_schema_compatibility", fail_check)
+    caplog.set_level(logging.ERROR, logger="app.worker")
+
+    assert not worker_module._schema_preflight("test-worker")
+    assert "RuntimeError" in caplog.text
+    assert secret not in caplog.text
 
 
 def test_process_claim_classifies_retryable_failure(
