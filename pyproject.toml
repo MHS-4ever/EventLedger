@@ -31,6 +31,7 @@ namespaces = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = [
     "pg_integration: opt-in tests requiring the isolated PostgreSQL test database",
 ]

@@ -22,3 +22,9 @@ dist/
 .coverage
 htmlcov/
 
+# ShipSafe local runtime state and credentials
+shipsafe/runtime/
+shipsafe/*.env
+!shipsafe/runtime.env.example
+
+

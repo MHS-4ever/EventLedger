@@ -227,3 +227,4 @@ The current authentication model is one static configured API key mapped to one 
 - [Reliability and security](docs/RELIABILITY_AND_SECURITY.md)
 - [Project summary](docs/PROJECT_SUMMARY.md)
 - [ShipSafe compatibility bridge](shipsafe/docs/COMPATIBILITY.md)
+- [ShipSafe local blue/green runbook](shipsafe/docs/LOCAL_RUNBOOK.md)
