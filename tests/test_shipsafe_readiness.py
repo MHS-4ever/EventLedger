@@ -198,3 +198,40 @@ def test_missing_python312_fails_before_host_or_release_changes(documents, tmp_p
         assert result.returncode == 1
         assert 'FATAL: /usr/bin/python3.12 is required' in result.stderr
         assert 'release operation aborted' in result.stderr
+
+
+def test_postgres_parent_ownership_preserves_pg18_contents(offline_plan, tmp_path):
+    script = offline_plan['aws_instance.shipsafe']['user_data']
+    block = script.split('# PostgreSQL 18 mounts this parent', 1)[1].split('\n', 1)[1].split('# ShipSafe controller runtime state', 1)[0]
+    assert 'install -d -o 999 -g 999 -m 0700 -- "$PG_PARENT"' in block
+    assert not re.search(r'(?m)^\s*(?:rm|find|chown|chmod)\b', block)
+    assert block.index('mountpoint -q') < block.index('install -d')
+    assert block.index('grep -Fxq "EBS_VOLUME_ID=$TARGET_VOL_ID"') < block.index('install -d')
+    root = tmp_path / 'volume'
+    cluster = root / 'postgres/18/docker'
+    cluster.mkdir(parents=True)
+    version = cluster / 'PG_VERSION'
+    version.write_text('18\n')
+    canary = root / '.shipsafe_ebs_mounted'
+    canary.write_text('EBS_VOLUME_ID=vol-test\n')
+    calls = tmp_path / 'install-calls'
+    # Intercept the privileged utility: assert its exact numeric owner/mode,
+    # target and nonrecursive invocation without changing host ownership.
+    original_metadata = (version.stat().st_mode, version.stat().st_uid, version.stat().st_gid, version.stat().st_mtime_ns)
+    setup = f'set -euo pipefail\nDATA_MOUNT="{root.as_posix()}"\nTARGET_VOL_ID=vol-test\nCANARY_FILE="{canary.as_posix()}"\n'
+    spy = f'install() {{ printf "%s\\n" "$*" >> "{calls.as_posix()}"; }}\n'
+    good_mount = 'mountpoint() { return 0; }\n'
+    result = shell(setup + good_mount + spy + block)
+    assert result.returncode == 0, result.stderr
+    assert calls.read_text().splitlines() == ['-d -o 999 -g 999 -m 0700 -- ' + (root / 'postgres').as_posix()]
+    assert version.read_text() == '18\n'
+    assert set(cluster.iterdir()) == {version}
+    assert (version.stat().st_mode, version.stat().st_uid, version.stat().st_gid, version.stat().st_mtime_ns) == original_metadata
+    calls.unlink()
+    # Both a missing mount and an incorrect canary must block all install calls.
+    result = shell(setup + 'mountpoint() { return 1; }\n' + spy + block)
+    assert result.returncode == 1 and not calls.exists()
+    canary.write_text('EBS_VOLUME_ID=vol-wrong\n')
+    result = shell(setup + good_mount + spy + block)
+    assert result.returncode == 1 and not calls.exists()
+    assert version.read_text() == '18\n'
