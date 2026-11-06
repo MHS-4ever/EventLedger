@@ -50,7 +50,10 @@ monthly_budget_usd = "5"  # notification-only; does not stop resources
 # ---------------------------------------------------------------------------
 # project_prefix           = "shipsafe"
 # environment              = "production"
-# instance_type            = "t3.medium"
+# Partial-apply recovery: c7i-flex.large was verified FreeTierEligible in us-east-1a.
+# It supports the pinned AL2023 x86_64 AMI with 2 vCPU and 4 GiB RAM.
+# Recheck account eligibility/AZ offerings; credits do not guarantee zero charges.
+instance_type = "c7i-flex.large"
 # root_volume_size_gb      = 20
 # data_volume_size_gb      = 20
 # vpc_cidr                 = "10.0.0.0/16"
