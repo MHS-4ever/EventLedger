@@ -6,12 +6,11 @@ apply, push, merge or resource creation was performed by this review.
 
 ## Decision
 
-**Not ready for apply.** The offline configuration is validated, but the fresh
-normally locked main plan is blocked by an existing plan lock. Notification
-recipient, credit eligibility, production Compose delivery and first-release
-publication/bootstrap must also be settled. A previous authenticated plan and
-the current mocked plan each describe 59 additions; neither substitutes for a
-fresh successfully locked authenticated plan of the final configuration.
+**Not ready for apply.** The final authenticated plan succeeded with normal S3
+native locking: **59 additions, zero changes, zero destroys**, with no Terraform
+warnings or errors. Locking is no longer a blocker. Notification recipient,
+credit eligibility, production Compose delivery and first-release
+publication/bootstrap must still be settled. No apply was run.
 
 ## Changes and offline evidence
 
@@ -121,12 +120,11 @@ until the verified EBS-backed production Compose setup is installed.
 
 ## Remaining deployment gates
 
-1. Fresh locked authenticated plan of final code. Existing lock:
-   `d1dc241a-bc4a-c2a2-206f-846b3cb908b2`, OperationTypePlan, Terraform 1.14.3,
-   `HASNAIN\mhasn@Hasnain`, created `2026-11-06T10:31:30.3371671Z`
-   (15:31 Pakistan time). No local Terraform process remained when inspected.
-   The lock is likely orphaned, but another session cannot be excluded. Do not
-   clear it without confirming ownership/inactivity. No lock was removed here.
+1. Locked plan gate completed. After user approval, the exact orphaned lock
+   `d1dc241a-bc4a-c2a2-206f-846b3cb908b2` was cleared with Terraform force-unlock
+   after rechecking that no local Terraform process existed. The final plan
+   ran with `-lock=true -lock-timeout=60s` and succeeded. Never routinely bypass
+   locking or remove a lock whose owner may still be active.
 2. Supply a real non-secret `alarm_email` (tfvars or TF_VAR_alarm_email) and
    confirm SNS subscription. Local blank override was removed so the environment
    variable works. This review invents no recipient and creates no subscription.
@@ -153,13 +151,23 @@ until the verified EBS-backed production Compose setup is installed.
 
 The initialized backend is S3 with `use_lockfile=true`, key
 `shipsafe/main/terraform.tfstate` in
-`shipsafe-tf-state-542468167362-us-east-1`. A normal authenticated plan with
-`-lock=true -lock-timeout=60s` returned **412 PreconditionFailed** with the lock
-above. S3's conditional lock write is enforcing exclusion. Successful acquisition
-and release are not yet proven. Main state HEAD returned 404 both before and
-after (no main apply yet); lock metadata showed the existing current version and
-no delete marker. No state contents, force-unlock, lock deletion or lock bypass
-were performed. See [normal plan procedure](PHASE3B_PLAN_REVIEW.md).
+`shipsafe-tf-state-542468167362-us-east-1`. The first normal authenticated plan
+returned **412 PreconditionFailed** because of an orphaned plan lock, demonstrating
+that S3 conditional writes enforce exclusion. The user explicitly approved
+clearing that exact lock after a local process check showed no Terraform process.
+
+Terraform force-unlock removed the approved lock at `2026-11-06T11:11:28Z`.
+The subsequent plan used `-lock=true -lock-timeout=60s` and acquired a fresh lock
+at `11:11:34Z`, then released it at `11:11:45Z` (16:11 Pakistan time).
+S3 object-version metadata showed the new lock version followed by a latest
+delete marker. Both acquisition and release are confirmed. Main state HEAD
+remained 404, consistent with no main apply; state contents were not edited.
+Temporary AWS credentials were kept in memory and cleared in finally.
+
+The reviewed plan is saved locally as
+`shipsafe/infra/main/shipsafe-phase3b1.tfplan`; its readable output is
+`shipsafe/infra/main/shipsafe-phase3b1.plan.txt`. Both remain Git-ignored.
+See [normal plan procedure](PHASE3B_PLAN_REVIEW.md).
 
 ## Cost estimate (before credits, taxes and usage)
 
@@ -189,10 +197,10 @@ Sources: [AWS instance-size example](https://docs.aws.amazon.com/prescriptive-gu
 
 ## Resource summary
 
-The previous authenticated main plan has the following 59 additions, zero
-changes and zero destroys. This review adds no new resource blocks; its updated
-configuration is covered by offline mocked plans. The final live count remains
-unconfirmed until the existing lock is resolved and a new locked plan succeeds.
+The fresh authenticated, normally locked main plan of the reviewed configuration
+has the following **59 additions, zero changes and zero destroys**. Account,
+Region, approved AMI, main-only OIDC inputs and disabled classic-subject fallback
+were verified in the saved plan. No notification email was supplied.
 
 | Terraform resource type | Count |
 |---|---:|
