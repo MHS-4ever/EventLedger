@@ -95,7 +95,7 @@ resource "aws_security_group" "shipsafe" {
 
 resource "aws_vpc_security_group_ingress_rule" "https" {
   security_group_id = aws_security_group.shipsafe.id
-  description       = "HTTPS — required for public access and Caddy HTTPS termination"
+  description       = "HTTPS - required for public access and Caddy HTTPS termination"
   ip_protocol       = "tcp"
   from_port         = 443
   to_port           = 443
@@ -113,7 +113,7 @@ resource "aws_vpc_security_group_ingress_rule" "https_v6" {
 
 resource "aws_vpc_security_group_ingress_rule" "http" {
   security_group_id = aws_security_group.shipsafe.id
-  description       = "HTTP — required for ACME HTTP-01 TLS certificate challenge"
+  description       = "HTTP - required for ACME HTTP-01 TLS certificate challenge"
   ip_protocol       = "tcp"
   from_port         = 80
   to_port           = 80
