@@ -85,7 +85,7 @@ def valid_environment(doc):
 
 def preflight(script):
     # Stop exactly before any host command, after the real runtime input checks.
-    return script.split('mountpoint -q /data/shipsafe', 1)[0] + "exit 88\nSHIPSAFE_SSM_BASH\n"
+    return script.split('if [ ! -x "/usr/bin/python3.12" ]; then', 1)[0] + "exit 88\nSHIPSAFE_SSM_BASH\n"
 
 
 @pytest.mark.parametrize('parameter,valid,invalid', [
@@ -170,3 +170,31 @@ def test_iam_and_first_boot_dependencies_are_scoped(offline_plan):
     for dependency in ['ec2_ssm_managed','ec2_ecr_pull','ec2_cloudwatch','ec2_ssm_secrets','ec2_s3_artifacts',
                        'aws_route_table_association.public','aws_vpc_security_group_egress_rule.all_outbound']:
         assert dependency in ec2.split('depends_on = [',1)[1].split(']',1)[0]
+
+
+def test_production_controller_requires_explicit_python312(documents, offline_plan):
+    for document in documents.values():
+        script = document['mainSteps'][0]['inputs']['runCommand'][0]
+        interpreters = re.findall(r'(?m)^(\S+)\s+shipsafe/controller\.py\b', script)
+        assert interpreters == ['/usr/bin/python3.12']
+        assert 'if [ ! -x "/usr/bin/python3.12" ]; then' in script
+        assert script.index('if [ ! -x "/usr/bin/python3.12" ]; then') < script.index('mountpoint -q /data/shipsafe')
+        assert script.index('if [ ! -x "/usr/bin/python3.12" ]; then') < script.index('/usr/bin/python3.12 shipsafe/controller.py')
+    userdata = offline_plan['aws_instance.shipsafe']['user_data']
+    packages = userdata.split('dnf install -y', 1)[1].split('# Package installation', 1)[0]
+    assert re.search(r'(?m)^\s+python3\.12\s+\\$', packages)
+    assert not re.search(r'(?m)^.*(?:ln\s|alternatives\s).*python3', userdata)
+
+
+def test_missing_python312_fails_before_host_or_release_changes(documents, tmp_path):
+    for document in documents.values():
+        script = document['mainSteps'][0]['inputs']['runCommand'][0]
+        # Run only the real interpreter guard, with a guaranteed missing path.
+        guard = script.split('if [ ! -x "/usr/bin/python3.12" ]; then', 1)[1]
+        guard = 'if [ ! -x "/usr/bin/python3.12" ]; then' + guard.split('mountpoint -q /data/shipsafe', 1)[0]
+        missing = (tmp_path / 'python312-does-not-exist').as_posix()
+        guard = guard.replace('"/usr/bin/python3.12"', '"' + missing + '"', 1)
+        result = shell(guard + '\nexit 88\n')
+        assert result.returncode == 1
+        assert 'FATAL: /usr/bin/python3.12 is required' in result.stderr
+        assert 'release operation aborted' in result.stderr

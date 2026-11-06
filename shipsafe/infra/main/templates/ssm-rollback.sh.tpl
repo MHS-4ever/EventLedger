@@ -10,5 +10,5 @@ release_root=$(cat /data/shipsafe/current-release-root)
 args=()
 if [[ -n "$SSM_ReleaseId" ]]; then args=(--release-id "$SSM_ReleaseId"); fi
 cd "$release_root"
-python3 shipsafe/controller.py --root "$release_root" --project-name shipsafe-production --production-config /etc/shipsafe/deployment.json --runtime-env /data/shipsafe/runtime.env --runtime-dir /data/shipsafe/runtime rollback "$${args[@]}"
+/usr/bin/python3.12 shipsafe/controller.py --root "$release_root" --project-name shipsafe-production --production-config /etc/shipsafe/deployment.json --runtime-env /data/shipsafe/runtime.env --runtime-dir /data/shipsafe/runtime rollback "$${args[@]}"
 SHIPSAFE_SSM_BASH

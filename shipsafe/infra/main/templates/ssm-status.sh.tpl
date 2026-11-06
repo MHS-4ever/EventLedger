@@ -10,5 +10,5 @@ else
 fi
 [[ "$release_root" =~ ^/opt/shipsafe/releases/[0-9a-f]{40}$ ]] || exit 1
 cd "$release_root"
-python3 shipsafe/controller.py --root "$release_root" --project-name shipsafe-production --production-config /etc/shipsafe/deployment.json --runtime-env /data/shipsafe/runtime.env --runtime-dir /data/shipsafe/runtime status
+/usr/bin/python3.12 shipsafe/controller.py --root "$release_root" --project-name shipsafe-production --production-config /etc/shipsafe/deployment.json --runtime-env /data/shipsafe/runtime.env --runtime-dir /data/shipsafe/runtime status
 SHIPSAFE_SSM_BASH

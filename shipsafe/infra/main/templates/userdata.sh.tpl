@@ -34,6 +34,7 @@ dnf install -y \
   amazon-cloudwatch-agent \
   amazon-ssm-agent \
   python3 \
+  python3.12 \
   python3-pip \
   git \
   jq
