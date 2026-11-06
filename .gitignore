@@ -27,4 +27,22 @@ shipsafe/runtime/
 shipsafe/*.env
 !shipsafe/runtime.env.example
 
+# Terraform local cache, state, and variable files
+**/.terraform/
+!**/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+tfplan.*
+*.plan.txt
+crash.log
+*.tfvars
+!*.tfvars.example
+
+# Temporary AWS operator credential exports (never commit)
+aws-credentials*.env
+temporary-credentials*.json
+**/.aws/
+
 
