@@ -265,7 +265,7 @@ def test_listing_combines_filters_with_inclusive_and_exclusive_boundaries(
     ]
 
 
-def test_readiness_uses_real_postgresql_revision(
+def test_readiness_uses_real_postgresql_compatibility_state(
     read_api_context: ReadApiContext,
 ) -> None:
     with TestClient(app) as client:

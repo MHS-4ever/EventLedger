@@ -25,6 +25,10 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="EVENTLEDGER_SOURCE_ID",
     )
+    shipsafe_production_mode: bool = Field(
+        default=False,
+        validation_alias="SHIPSAFE_PRODUCTION_MODE",
+    )
     worker_poll_interval_seconds: float = Field(
         default=1.0,
         gt=0,
@@ -89,6 +93,23 @@ class Settings(BaseSettings):
                 "WORKER_RETRY_MAX_SECONDS must be greater than or equal to "
                 "WORKER_RETRY_BASE_SECONDS"
             )
+        if self.shipsafe_production_mode:
+            api_key = self.eventledger_api_key
+            source_id = self.eventledger_source_id
+            if api_key is None or not api_key.get_secret_value():
+                raise ValueError(
+                    "SHIPSAFE_PRODUCTION_MODE requires EVENTLEDGER_API_KEY"
+                )
+            if (
+                source_id is None
+                or not source_id.strip()
+                or source_id != source_id.strip()
+                or not source_id.isprintable()
+            ):
+                raise ValueError(
+                    "SHIPSAFE_PRODUCTION_MODE requires a valid "
+                    "EVENTLEDGER_SOURCE_ID"
+                )
         return self
 
 

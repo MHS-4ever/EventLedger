@@ -21,7 +21,10 @@ dependencies = [
 dev = [
     "httpx2>=2.0,<3.0",
     "pytest>=8.0,<9.0",
+    "pyyaml>=6.0,<7.0",
 ]
+
+operators = ["boto3>=1.35,<2.0"]
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -31,6 +34,7 @@ namespaces = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = [
     "pg_integration: opt-in tests requiring the isolated PostgreSQL test database",
 ]

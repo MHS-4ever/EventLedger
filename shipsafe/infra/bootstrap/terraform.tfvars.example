@@ -1,0 +1,6 @@
+# Copy to terraform.tfvars and fill in real values.
+# This file must NOT be committed to version control.
+
+aws_region        = "CHANGE_ME"   # e.g. us-east-1
+state_bucket_name = "CHANGE_ME"   # e.g. shipsafe-tf-state-123456789012-us-east-1
+environment       = "production"

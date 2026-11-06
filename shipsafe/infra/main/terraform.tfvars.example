@@ -1,0 +1,64 @@
+# Copy to terraform.tfvars and fill in real values.
+# This file must NOT be committed to version control.
+# terraform.tfvars is included in .gitignore.
+
+# ---------------------------------------------------------------------------
+# Required — no defaults
+# ---------------------------------------------------------------------------
+aws_region         = "CHANGE_ME"   # e.g. us-east-1  (confirm pricing before provisioning)
+# Approved for us-east-1 only; reverify the AMI when changing Region.
+ami_id = "ami-0c230065b91270bc6"
+github_repository  = "CHANGE_ME"   # e.g. myorg/eventledger
+artifact_bucket_name = "CHANGE_ME" # explicitly approved, globally unique bucket
+artifact_release_prefix = "releases"
+
+# ---------------------------------------------------------------------------
+# GitHub immutable OIDC identifiers (enforced for repos on/after July 15, 2026)
+# ---------------------------------------------------------------------------
+github_owner_id      = "112760992"   # EventLedger owner ID
+github_repository_id = "1438492915"  # EventLedger repository ID
+# allow_classic_oidc_subject = false # keep false to strictly enforce immutable format
+
+# ---------------------------------------------------------------------------
+# Deployment identity — choose branch OR environment trust (not both)
+# ---------------------------------------------------------------------------
+# Option A: branch-scoped trust (simpler; no GitHub Environments required)
+# Production trust stays on main even when Terraform is reviewed on feature/shipsafe.
+deploy_branch      = "main"
+deploy_environment = ""
+
+# Option B: environment-scoped trust (recommended for production)
+# Configure the environment with required reviewers in GitHub first.
+# deploy_branch      = ""
+# deploy_environment = "production"
+
+# ---------------------------------------------------------------------------
+# DNS
+# ---------------------------------------------------------------------------
+domain_name = ""   # e.g. api.example.com  — leave empty until DNS is ready
+
+# ---------------------------------------------------------------------------
+# Notifications / cost
+# ---------------------------------------------------------------------------
+# Non-secret; alternatively omit this assignment and set TF_VAR_alarm_email.
+# An assignment here takes precedence over TF_VAR_alarm_email. Confirm SNS email subscription.
+alarm_email        = ""    # e.g. you@example.com
+monthly_budget_usd = "5"  # notification-only; does not stop resources
+
+# ---------------------------------------------------------------------------
+# Optional overrides (defaults are usually fine)
+# ---------------------------------------------------------------------------
+# project_prefix           = "shipsafe"
+# environment              = "production"
+# instance_type            = "t3.medium"
+# root_volume_size_gb      = 20
+# data_volume_size_gb      = 20
+# vpc_cidr                 = "10.0.0.0/16"
+# public_subnet_cidr       = "10.0.1.0/24"
+# availability_zone_suffix = "a"
+# log_retention_days       = 30
+# ecr_image_retention_count = 10
+
+# 24-48 hour testing window. These alert, never stop resources.
+budget_actual_alert_usd = 2
+budget_forecast_alert_usd = 4

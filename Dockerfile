@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-ARG PYTHON_BASE_IMAGE=python:3.12.4-slim-bookworm
+ARG PYTHON_BASE_IMAGE=python:3.12.4-slim-bookworm@sha256:a3e58f9399353be051735f09be0316bfdeab571a5c6a24fd78b92df85bcb2d85
 
 FROM ${PYTHON_BASE_IMAGE} AS builder
 

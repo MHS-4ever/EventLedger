@@ -24,3 +24,4 @@ dist
 tests
 compose*.yaml
 MANUAL_TESTING*.md
+shipsafe

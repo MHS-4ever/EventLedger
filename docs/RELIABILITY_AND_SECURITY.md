@@ -98,9 +98,9 @@ Remaining concerns:
 
 `/health` is process liveness only and does not contact PostgreSQL. A healthy response does not mean ingestion or processing can use the database.
 
-`/ready` executes `SELECT 1` and compares the database's `alembic_version` with the single migration head packaged in the application. It returns a safe `503 {"status":"not_ready"}` on database, table, revision, or internal readiness failure. It does not reveal connection strings, SQL text, exceptions, or credentials.
+`/ready` executes `SELECT 1` and evaluates the ShipSafe schema-compatibility bridge. Without a contract table, only the known legacy bootstrap revision `d4e5f6a7b8c9` is accepted. After a later reviewed migration creates the contract table, its explicit version is authoritative instead of exact Alembic-head equality. It returns a safe `503 {"status":"not_ready"}` on database, table, revision, contract, or internal readiness failure. It does not reveal connection strings, SQL text, exceptions, or credentials.
 
-Readiness confirms connectivity and schema revision, not overall worker health, queue progress, disk capacity, replication health, or downstream availability.
+The worker evaluates the same compatibility check before polling and exits without claiming an event when the schema is incompatible. Readiness confirms connectivity and runtime schema compatibility, not overall worker health, queue progress, disk capacity, replication health, or downstream availability.
 
 ## Deployment limitations
 

@@ -6,8 +6,8 @@ from fastapi.testclient import TestClient
 from pytest import LogCaptureFixture, MonkeyPatch
 from sqlalchemy.exc import SQLAlchemyError
 
-import app.db.readiness as readiness_service
 import app.main as main_module
+from app.db.compatibility import LEGACY_BOOTSTRAP_REVISION
 from app.db.session import get_db_session
 from app.main import app
 
@@ -16,10 +16,14 @@ class FakeReadySession:
     def __init__(
         self,
         *,
-        revision: str = "expected-head",
+        revision: str = LEGACY_BOOTSTRAP_REVISION,
+        contract_exists: bool = False,
+        contract_version: int | None = None,
         error: Exception | None = None,
     ) -> None:
         self.revision = revision
+        self.contract_exists = contract_exists
+        self.contract_version = contract_version
         self.error = error
         self.execute_count = 0
         self.scalar_count = 0
@@ -30,9 +34,13 @@ class FakeReadySession:
         if self.error is not None:
             raise self.error
 
-    def scalar(self, statement: object) -> str:
-        del statement
+    def scalar(self, statement: object) -> str | int | bool | None:
         self.scalar_count += 1
+        sql = str(statement)
+        if "to_regclass" in sql:
+            return self.contract_exists
+        if "eventledger_schema_contract" in sql:
+            return self.contract_version
         return self.revision
 
 
@@ -55,37 +63,54 @@ def install_ready_session() -> Generator[
 client = TestClient(app)
 
 
-def test_ready_when_database_revision_matches(
-    monkeypatch: MonkeyPatch,
+def test_ready_on_legacy_bootstrap_revision(
     install_ready_session: Callable[[FakeReadySession], None],
 ) -> None:
     session = FakeReadySession()
     install_ready_session(session)
-    monkeypatch.setattr(
-        readiness_service,
-        "expected_alembic_revision",
-        lambda: "expected-head",
-    )
 
     response = client.get("/ready")
 
     assert response.status_code == 200
     assert response.json() == {"status": "ready"}
     assert session.execute_count == 1
-    assert session.scalar_count == 1
+    assert session.scalar_count == 2
+
+
+def test_ready_on_supported_contract_without_reading_alembic_revision(
+    install_ready_session: Callable[[FakeReadySession], None],
+) -> None:
+    session = FakeReadySession(
+        revision="future-revision-not-consulted",
+        contract_exists=True,
+        contract_version=1,
+    )
+    install_ready_session(session)
+
+    response = client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready"}
+    assert session.scalar_count == 2
 
 
 def test_not_ready_when_database_revision_is_stale(
-    monkeypatch: MonkeyPatch,
     install_ready_session: Callable[[FakeReadySession], None],
 ) -> None:
     session = FakeReadySession(revision="old-revision")
     install_ready_session(session)
-    monkeypatch.setattr(
-        readiness_service,
-        "expected_alembic_revision",
-        lambda: "expected-head",
-    )
+
+    response = client.get("/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {"status": "not_ready"}
+
+
+def test_not_ready_when_contract_is_unsupported(
+    install_ready_session: Callable[[FakeReadySession], None],
+) -> None:
+    session = FakeReadySession(contract_exists=True, contract_version=2)
+    install_ready_session(session)
 
     response = client.get("/ready")
 
@@ -94,18 +119,12 @@ def test_not_ready_when_database_revision_is_stale(
 
 
 def test_readiness_failure_is_sanitized(
-    monkeypatch: MonkeyPatch,
     caplog: LogCaptureFixture,
     install_ready_session: Callable[[FakeReadySession], None],
 ) -> None:
     secret = "password=must-not-leak"
     session = FakeReadySession(error=SQLAlchemyError(secret))
     install_ready_session(session)
-    monkeypatch.setattr(
-        readiness_service,
-        "expected_alembic_revision",
-        lambda: "expected-head",
-    )
     caplog.set_level(logging.WARNING, logger="app.main")
 
     response = client.get("/ready")

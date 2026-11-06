@@ -1,0 +1,113 @@
+name: shipsafe-local
+
+x-app-environment: &app-environment
+  POSTGRES_DB: "${POSTGRES_DB:?POSTGRES_DB is required}"
+  POSTGRES_USER: "${POSTGRES_USER:?POSTGRES_USER is required}"
+  POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
+  POSTGRES_HOST: db
+  POSTGRES_PORT: "5432"
+  EVENTLEDGER_API_KEY: "${EVENTLEDGER_API_KEY:?EVENTLEDGER_API_KEY is required}"
+  EVENTLEDGER_SOURCE_ID: "${EVENTLEDGER_SOURCE_ID:?EVENTLEDGER_SOURCE_ID is required}"
+  SHIPSAFE_PRODUCTION_MODE: "true"
+  WORKER_POLL_INTERVAL_SECONDS: "${WORKER_POLL_INTERVAL_SECONDS:-1}"
+  WORKER_LEASE_DURATION_SECONDS: "${WORKER_LEASE_DURATION_SECONDS:-30}"
+  WORKER_MAX_ATTEMPTS: "${WORKER_MAX_ATTEMPTS:-3}"
+  WORKER_RETRY_BASE_SECONDS: "${WORKER_RETRY_BASE_SECONDS:-2}"
+  WORKER_RETRY_MAX_SECONDS: "${WORKER_RETRY_MAX_SECONDS:-60}"
+  WORKER_FAILURE_SIMULATION_ENABLED: "false"
+  WORKER_SIMULATION_MAX_SLOW_SECONDS: "${WORKER_SIMULATION_MAX_SLOW_SECONDS:-30}"
+
+x-api: &api
+  restart: unless-stopped
+  init: true
+  environment: *app-environment
+  networks:
+    - backend
+  healthcheck:
+    test:
+      - CMD
+      - python
+      - -c
+      - >-
+        import urllib.request;
+        urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3).read()
+    interval: 5s
+    timeout: 4s
+    retries: 12
+    start_period: 5s
+
+services:
+  db:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:?POSTGRES_DB is required}"
+      POSTGRES_USER: "${POSTGRES_USER:?POSTGRES_USER is required}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
+    volumes:
+      - shipsafe_postgres_data:/var/lib/postgresql
+    networks:
+      - backend
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  migrate:
+    image: "${SHIPSAFE_MIGRATION_IMAGE:?SHIPSAFE_MIGRATION_IMAGE is required}"
+    restart: "no"
+    environment: *app-environment
+    networks:
+      - backend
+    command: ["python", "-m", "alembic", "upgrade", "d4e5f6a7b8c9"]
+
+  api-blue:
+    <<: *api
+    image: "${SHIPSAFE_BLUE_IMAGE:?SHIPSAFE_BLUE_IMAGE is required}"
+
+  api-green:
+    <<: *api
+    image: "${SHIPSAFE_GREEN_IMAGE:?SHIPSAFE_GREEN_IMAGE is required}"
+
+  worker:
+    image: "${SHIPSAFE_WORKER_IMAGE:?SHIPSAFE_WORKER_IMAGE is required}"
+    restart: unless-stopped
+    init: true
+    environment: *app-environment
+    networks:
+      - backend
+    command: ["python", "-m", "app.worker", "--log-level", "INFO"]
+    stop_grace_period: 35s
+
+  caddy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${SHIPSAFE_PROXY_PORT:-8080}:8080"
+    volumes:
+      - type: bind
+        source: "${SHIPSAFE_RUNTIME_DIR:?SHIPSAFE_RUNTIME_DIR is required}"
+        target: /etc/caddy/runtime
+        read_only: true
+    networks:
+      - backend
+      - edge
+    command:
+      - caddy
+      - run
+      - --config
+      - /etc/caddy/runtime/Caddyfile
+      - --adapter
+      - caddyfile
+
+volumes:
+  shipsafe_postgres_data:
+
+networks:
+  backend:
+    internal: true
+  edge:

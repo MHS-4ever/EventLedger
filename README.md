@@ -69,7 +69,7 @@ All `/v1` endpoints require `X-API-Key`. Missing and invalid keys return `401`. 
 | Method and path | Purpose | Important inputs | Success response |
 |---|---|---|---|
 | `GET /health` | Process liveness | None | `200 {"status":"ok"}` |
-| `GET /ready` | Database connectivity and current Alembic revision | None | `200 {"status":"ready"}` or safe `503` |
+| `GET /ready` | Database connectivity and supported schema contract | None | `200 {"status":"ready"}` or safe `503` |
 | `GET /v1/auth/check` | Verify API key and mapped source | `X-API-Key` | `200` with `source_id` |
 | `POST /v1/events` | Ingest an event | `X-API-Key`, `Idempotency-Key`, JSON body | `201`; identical replay `200` |
 | `GET /v1/events` | List source-owned events | Optional `status`, `event_type`, `created_from`, `created_to`, `limit`, `offset` | Paginated `200` |
@@ -170,7 +170,7 @@ Stop without deleting persistent data:
 docker compose @compose stop
 ```
 
-Do not use `down -v` for a delivery project whose data must be retained. The complete verified workflow is in [Day 3 manual testing](MANUAL_TESTING_DAY3.md).
+Do not use `down -v` for a delivery project whose data must be retained. The implemented guarantees, operational safeguards, and limitations are documented in [Reliability and security](docs/RELIABILITY_AND_SECURITY.md).
 
 ## Migrations
 
@@ -190,7 +190,8 @@ Do not run downgrades against a database containing data that must be preserved.
 ## Health and readiness
 
 - `GET /health` proves the API process can serve a request. It does not access PostgreSQL.
-- `GET /ready` executes a database query and requires the database's `alembic_version` to equal the single migration head packaged in the image. It returns only `{"status":"not_ready"}` on failure and does not expose database errors or credentials.
+- `GET /ready` executes a database query and checks the ShipSafe schema-compatibility bridge. Before the contract table exists, only legacy revision `d4e5f6a7b8c9` is accepted. After a later reviewed migration creates the table, the explicit contract version is authoritative. Failures return only `{"status":"not_ready"}` and do not expose database errors or credentials.
+- Set `SHIPSAFE_PRODUCTION_MODE=true` for a ShipSafe runtime. Startup then requires a nonempty API key and a valid configured source identity; development remains opt-in and backward compatible.
 
 ## Tests
 
@@ -224,5 +225,6 @@ The current authentication model is one static configured API key mapped to one 
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Reliability and security](docs/RELIABILITY_AND_SECURITY.md)
-- [Day 3 demonstration and manual testing](MANUAL_TESTING_DAY3.md)
 - [Project summary](docs/PROJECT_SUMMARY.md)
+- [ShipSafe compatibility bridge](shipsafe/docs/COMPATIBILITY.md)
+- [ShipSafe local blue/green runbook](shipsafe/docs/LOCAL_RUNBOOK.md)
