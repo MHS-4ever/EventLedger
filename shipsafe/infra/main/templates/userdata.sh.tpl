@@ -215,9 +215,18 @@ systemctl start docker.service
 # Directory structure on persistent EBS storage
 # ---------------------------------------------------------------------------
 
-# PostgreSQL database data directory
-mkdir -p "$DATA_MOUNT/postgres"
-chmod 0700 "$DATA_MOUNT/postgres"
+# PostgreSQL 18 mounts this parent at /var/lib/postgresql and creates 18/docker.
+# Fix only the parent metadata; never traverse or reset existing cluster contents.
+if ! mountpoint -q "$DATA_MOUNT" || ! grep -Fxq "EBS_VOLUME_ID=$TARGET_VOL_ID" "$CANARY_FILE"; then
+  echo "FATAL: refusing PostgreSQL directory setup without the expected EBS mount/canary" >&2
+  exit 1
+fi
+PG_PARENT="$DATA_MOUNT/postgres"
+if [ -L "$PG_PARENT" ] || { [ -e "$PG_PARENT" ] && [ ! -d "$PG_PARENT" ]; }; then
+  echo "FATAL: PostgreSQL parent must be a real directory, not a symlink or file" >&2
+  exit 1
+fi
+install -d -o 999 -g 999 -m 0700 -- "$PG_PARENT"
 
 # ShipSafe controller runtime state & release manifests
 mkdir -p "$DATA_MOUNT/runtime"
