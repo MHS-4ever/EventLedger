@@ -243,9 +243,28 @@ variable "alarm_email" {
 variable "monthly_budget_usd" {
   description = <<-EOT
     Monthly cost budget threshold in USD.
-    An alert notification is sent at 80% actual and 100% forecasted.
+    Actual and forecast alerts use the separately configurable USD thresholds.
     This is a notification only — it does not stop resources.
   EOT
   type        = string
   default     = "30"
+}
+
+variable "budget_actual_alert_usd" {
+  description = "Actual spend alert for the short live test window; notification only."
+  type        = number
+  default     = 2
+  validation {
+    condition     = var.budget_actual_alert_usd > 0
+    error_message = "Actual spend alert must be positive."
+  }
+}
+variable "budget_forecast_alert_usd" {
+  description = "Forecast spend alert; not a spending cap."
+  type        = number
+  default     = 4
+  validation {
+    condition     = var.budget_forecast_alert_usd > 0
+    error_message = "Forecast spend alert must be positive."
+  }
 }

@@ -182,12 +182,18 @@ resource "aws_budgets_budget" "shipsafe" {
   limit_unit   = "USD"
   time_unit    = "MONTHLY"
 
+  # Alert on underlying usage even when promotional credits cover the bill.
+  cost_types {
+    include_credit = false
+    include_refund = false
+  }
+
   dynamic "notification" {
     for_each = var.alarm_email != "" ? [1] : []
     content {
       comparison_operator        = "GREATER_THAN"
-      threshold                  = 80
-      threshold_type             = "PERCENTAGE"
+      threshold                  = var.budget_actual_alert_usd
+      threshold_type             = "ABSOLUTE_VALUE"
       notification_type          = "ACTUAL"
       subscriber_email_addresses = [var.alarm_email]
     }
@@ -197,8 +203,8 @@ resource "aws_budgets_budget" "shipsafe" {
     for_each = var.alarm_email != "" ? [1] : []
     content {
       comparison_operator        = "GREATER_THAN"
-      threshold                  = 100
-      threshold_type             = "PERCENTAGE"
+      threshold                  = var.budget_forecast_alert_usd
+      threshold_type             = "ABSOLUTE_VALUE"
       notification_type          = "FORECASTED"
       subscriber_email_addresses = [var.alarm_email]
     }

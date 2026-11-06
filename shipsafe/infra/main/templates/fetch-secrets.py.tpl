@@ -24,7 +24,8 @@ def main():
         name = item["Name"].removeprefix("/shipsafe/runtime/")
         value = item["Value"]
         # Match the controller's plain KEY=value parser and Compose dotenv safely.
-        if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", name) or item["Type"] != "SecureString":
+        allowed = {"POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD", "EVENTLEDGER_API_KEY", "EVENTLEDGER_SOURCE_ID"}
+        if name not in allowed or item["Type"] != "SecureString":
             raise ValueError("invalid parameter metadata")
         if not value or value != value.strip() or any(c in value for c in "\r\n\x00$\"'`\\#"):
             raise ValueError("parameter value is incompatible with the runtime env format")

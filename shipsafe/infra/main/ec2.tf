@@ -54,12 +54,13 @@ resource "aws_instance" "shipsafe" {
   # Only install system packages and enable SSM/CloudWatch agents here.
   # Runtime credentials are delivered via SSM Parameter Store at deploy time.
   user_data = replace(templatefile("${path.module}/templates/userdata.sh.tpl", {
-    aws_region           = var.aws_region
-    ecr_registry         = local.ecr_registry_url
-    cw_log_group         = aws_cloudwatch_log_group.shipsafe.name
-    project_prefix       = var.project_prefix
-    ebs_volume_id        = aws_ebs_volume.data.id
-    fetch_secrets_script = templatefile("${path.module}/templates/fetch-secrets.py.tpl", { aws_region = var.aws_region, ebs_volume_id = aws_ebs_volume.data.id })
+    aws_region               = var.aws_region
+    ecr_registry             = local.ecr_registry_url
+    cw_log_group             = aws_cloudwatch_log_group.shipsafe.name
+    project_prefix           = var.project_prefix
+    ebs_volume_id            = aws_ebs_volume.data.id
+    deployment_config_base64 = base64encode(jsonencode({ domain = var.domain_name, region = var.aws_region, log_group = aws_cloudwatch_log_group.shipsafe.name }))
+    fetch_secrets_script     = templatefile("${path.module}/templates/fetch-secrets.py.tpl", { aws_region = var.aws_region, ebs_volume_id = aws_ebs_volume.data.id })
   }), "\r\n", "\n")
 
   # Ensure the instance profile and log group exist before the instance boots.

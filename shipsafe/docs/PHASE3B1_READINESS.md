@@ -1,5 +1,8 @@
 # Phase 3B.1 pre-deployment readiness
 
+Historical checkpoint. The current implementation and remaining decisions are
+in [Phase 3C](PHASE3C_REPORT.md) and its [runbook](PHASE3C_RUNBOOK.md).
+
 Reviewed on 2026-11-06 on `feature/shipsafe`. Target: account `542468167362`,
 Region `us-east-1`, AMI `ami-0c230065b91270bc6` (AL2023 x86_64). No infrastructure
 apply, push, merge or resource creation was performed by this review.

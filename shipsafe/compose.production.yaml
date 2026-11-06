@@ -1,0 +1,152 @@
+name: shipsafe-production
+
+x-app-environment: &app-environment
+  POSTGRES_DB: "${POSTGRES_DB:?POSTGRES_DB is required}"
+  POSTGRES_USER: "${POSTGRES_USER:?POSTGRES_USER is required}"
+  POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
+  POSTGRES_HOST: db
+  POSTGRES_PORT: "5432"
+  EVENTLEDGER_API_KEY: "${EVENTLEDGER_API_KEY:?EVENTLEDGER_API_KEY is required}"
+  EVENTLEDGER_SOURCE_ID: "${EVENTLEDGER_SOURCE_ID:?EVENTLEDGER_SOURCE_ID is required}"
+  SHIPSAFE_PRODUCTION_MODE: "true"
+  WORKER_POLL_INTERVAL_SECONDS: "${WORKER_POLL_INTERVAL_SECONDS:-1}"
+  WORKER_LEASE_DURATION_SECONDS: "${WORKER_LEASE_DURATION_SECONDS:-30}"
+  WORKER_MAX_ATTEMPTS: "${WORKER_MAX_ATTEMPTS:-3}"
+  WORKER_RETRY_BASE_SECONDS: "${WORKER_RETRY_BASE_SECONDS:-2}"
+  WORKER_RETRY_MAX_SECONDS: "${WORKER_RETRY_MAX_SECONDS:-60}"
+  WORKER_FAILURE_SIMULATION_ENABLED: "false"
+  WORKER_SIMULATION_MAX_SLOW_SECONDS: "${WORKER_SIMULATION_MAX_SLOW_SECONDS:-30}"
+
+x-logging: &logging
+  driver: awslogs
+  options: &log-options
+    awslogs-region: "${AWS_REGION:?AWS_REGION required}"
+    awslogs-group: "${SHIPSAFE_LOG_GROUP:?SHIPSAFE_LOG_GROUP required}"
+    awslogs-create-group: "false"
+
+x-api: &api
+  restart: unless-stopped
+  logging:
+    <<: *logging
+    options:
+      <<: *log-options
+      awslogs-group: "${SHIPSAFE_LOG_GROUP:?SHIPSAFE_LOG_GROUP required}/api"
+  init: true
+  environment: *app-environment
+  networks:
+    - backend
+  healthcheck:
+    test:
+      - CMD
+      - python
+      - -c
+      - >-
+        import urllib.request;
+        urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3).read()
+    interval: 5s
+    timeout: 4s
+    retries: 12
+    start_period: 5s
+
+services:
+  db:
+    image: postgres:18@sha256:bd5dfa494a5a259704365813dbfa5fa6b3e69be7348d43b547f540c730478583
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:?POSTGRES_DB is required}"
+      POSTGRES_USER: "${POSTGRES_USER:?POSTGRES_USER is required}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
+    volumes:
+      - type: bind
+        source: /data/shipsafe/postgres
+        target: /var/lib/postgresql
+        bind:
+          create_host_path: false
+    networks:
+      - backend
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  migrate:
+    image: "${SHIPSAFE_MIGRATION_IMAGE:?SHIPSAFE_MIGRATION_IMAGE is required}"
+    restart: "no"
+    logging: *logging
+    environment: *app-environment
+    networks:
+      - backend
+    command: ["python", "-m", "alembic", "upgrade", "d4e5f6a7b8c9"]
+
+  api-blue:
+    <<: *api
+    image: "${SHIPSAFE_BLUE_IMAGE:?SHIPSAFE_BLUE_IMAGE is required}"
+
+  api-green:
+    <<: *api
+    image: "${SHIPSAFE_GREEN_IMAGE:?SHIPSAFE_GREEN_IMAGE is required}"
+
+  worker:
+    image: "${SHIPSAFE_WORKER_IMAGE:?SHIPSAFE_WORKER_IMAGE is required}"
+    restart: unless-stopped
+    logging:
+      <<: *logging
+      options:
+        <<: *log-options
+        awslogs-group: "${SHIPSAFE_LOG_GROUP:?SHIPSAFE_LOG_GROUP required}/worker"
+    init: true
+    environment: *app-environment
+    networks:
+      - backend
+    command: ["python", "-m", "app.worker", "--log-level", "INFO"]
+    stop_grace_period: 35s
+
+  caddy:
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    restart: unless-stopped
+    logging:
+      <<: *logging
+      options:
+        <<: *log-options
+        awslogs-group: "${SHIPSAFE_LOG_GROUP:?SHIPSAFE_LOG_GROUP required}/caddy"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - type: bind
+        source: "${SHIPSAFE_RUNTIME_DIR:?SHIPSAFE_RUNTIME_DIR is required}"
+        target: /etc/caddy/runtime
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /data/shipsafe/caddy/data
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /data/shipsafe/caddy/config
+        target: /config
+        bind:
+          create_host_path: false
+    networks:
+      - backend
+      - edge
+    command:
+      - caddy
+      - run
+      - --config
+      - /etc/caddy/runtime/Caddyfile
+      - --adapter
+      - caddyfile
+
+networks:
+  backend:
+    internal: true
+  edge:

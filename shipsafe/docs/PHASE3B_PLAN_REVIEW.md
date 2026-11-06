@@ -22,7 +22,7 @@ or enable classic subject fallback. See [readiness review](PHASE3B1_READINESS.md
 `alarm_email` is a non-secret deployment variable shared by CloudWatch SNS email
 and both AWS Budgets notifications. Set it in local tfvars, or omit it there and
 set `TF_VAR_alarm_email` in the process. A tfvars assignment takes precedence
-over the environment variable. No real notification address has been supplied.
+over the environment variable. The confirmed recipient is configured only in ignored local tfvars; do not copy it into tracked files.
 SNS subscriptions require recipient confirmation. An empty value disables email
 notifications. Budgets notify; they do not stop resources or cap spending.
 
@@ -59,3 +59,5 @@ Do not print or persist the credential object. Plans, local tfvars, caches and
 state stay Git-ignored. Do not apply from this review procedure. Review counts,
 destruction/replacement, EBS preservation, IAM scope, notifications, publisher
 and runtime prerequisites, and credit eligibility before any later approval.
+
+For current first-release steps and the 24-48-hour cost window, see [Phase 3C](PHASE3C_RUNBOOK.md).

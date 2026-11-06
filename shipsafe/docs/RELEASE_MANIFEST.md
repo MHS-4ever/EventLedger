@@ -47,3 +47,17 @@ Phase 2 manifests declare legacy revision `d4e5f6a7b8c9`. Candidate readiness
 and worker preflight are the live compatibility checks. Manual rollback accepts
 only a release previously verified for both API and worker and declaring the
 same legacy revision. Database downgrade is never attempted.
+
+## Phase 3C publisher manifest
+
+`deployment.json` in the deterministic archive records `manifest_version`, the
+full committed Git SHA, ECR image digest reference, `schema_revision`,
+`layout=repository-root`, and SHA256 of each included file. The archive excludes
+credentials, Terraform, tests and runtime state. SSM verifies this identity and
+file set before installing a SHA-named release directory. The controller's
+host-local manifest additionally records `source_image_ref` (the original ECR
+digest); `image_id` is Docker's config/content ID and differs from the ECR
+manifest digest. Local tags remain revalidated against that content ID.
+
+Production uses `compose.production.yaml`; local acceptance continues using
+`compose.yaml`. See [Phase 3C runbook](PHASE3C_RUNBOOK.md).

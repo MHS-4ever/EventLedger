@@ -43,7 +43,7 @@ domain_name = ""   # e.g. api.example.com  — leave empty until DNS is ready
 # Non-secret; alternatively omit this assignment and set TF_VAR_alarm_email.
 # An assignment here takes precedence over TF_VAR_alarm_email. Confirm SNS email subscription.
 alarm_email        = ""    # e.g. you@example.com
-monthly_budget_usd = "30"  # notification-only; does not stop resources
+monthly_budget_usd = "5"  # notification-only; does not stop resources
 
 # ---------------------------------------------------------------------------
 # Optional overrides (defaults are usually fine)
@@ -58,3 +58,7 @@ monthly_budget_usd = "30"  # notification-only; does not stop resources
 # availability_zone_suffix = "a"
 # log_retention_days       = 30
 # ecr_image_retention_count = 10
+
+# 24-48 hour testing window. These alert, never stop resources.
+budget_actual_alert_usd = 2
+budget_forecast_alert_usd = 4

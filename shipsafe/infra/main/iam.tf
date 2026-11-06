@@ -140,6 +140,7 @@ resource "aws_iam_policy" "ecr_push" {
           "ecr:UploadLayerPart",
           "ecr:DescribeImages",
           "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer",
         ]
         Resource = aws_ecr_repository.shipsafe.arn
       }
@@ -281,6 +282,7 @@ resource "aws_iam_policy" "cloudwatch_write" {
         Sid    = "CloudWatchLogs"
         Effect = "Allow"
         Action = [
+          "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents",
           "logs:DescribeLogStreams",
@@ -290,6 +292,13 @@ resource "aws_iam_policy" "cloudwatch_write" {
             aws_cloudwatch_log_group.worker, aws_cloudwatch_log_group.controller,
           aws_cloudwatch_log_group.caddy] : "${group.arn}:*"
         ]
+      },
+      {
+        # Required by SSM Run Command output discovery; this read API is unscoped.
+        Sid      = "CloudWatchLogGroupDiscovery"
+        Effect   = "Allow"
+        Action   = "logs:DescribeLogGroups"
+        Resource = "*"
       },
       {
         Sid      = "CloudWatchMetrics"
@@ -423,7 +432,7 @@ resource "aws_iam_policy" "s3_publish_artifacts" {
     Statement = [{
       Sid      = "PublishReleaseArtifacts"
       Effect   = "Allow"
-      Action   = ["s3:PutObject", "s3:AbortMultipartUpload"]
+      Action   = ["s3:PutObject", "s3:GetObject", "s3:AbortMultipartUpload"]
       Resource = "${aws_s3_bucket.release_artifacts.arn}/${var.artifact_release_prefix}/*"
     }]
   })

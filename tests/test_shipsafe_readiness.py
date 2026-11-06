@@ -47,7 +47,7 @@ def test_rendered_cloud_init_script_is_plain_lf_and_valid_bash(offline_plan):
     assert '\r' not in script and len(script.encode()) <= 16384
     source = (MAIN / 'ec2.tf').read_text()
     assert 'user_data = replace(templatefile(' in source
-    assert 'base64encode(' not in source and 'user_data_base64 =' not in source
+    assert 'user_data = base64encode(' not in source and 'user_data_base64 =' not in source
     assert shell(script, syntax=True).returncode == 0
     helper = script.split("<<'SECRETS_SCRIPT'\n", 1)[1].split('\nSECRETS_SCRIPT', 1)[0]
     compile(helper, 'rendered-fetch-secrets', 'exec')
@@ -78,7 +78,7 @@ def test_all_rendered_documents_have_safe_linux_shell_and_parameters(documents):
 def valid_environment(doc):
     env = {k: v for k, v in os.environ.items() if not k.startswith('SSM_')}
     env.update({f'SSM_{k}': v['default'] for k, v in doc['parameters'].items() if 'default' in v})
-    env.update(SSM_ImageRef='542468167362.dkr.ecr.us-east-1.amazonaws.com/shipsafe/eventledger@sha256:'+'a'*64,
+    env.update(SSM_ArtifactS3Uri='s3://shipsafe-artifacts-542468167362-us-east-1/releases/'+'b'*40+'/shipsafe-release.tar.gz', SSM_ArtifactSha256='a'*64, SSM_ImageRef='542468167362.dkr.ecr.us-east-1.amazonaws.com/shipsafe/eventledger@sha256:'+'a'*64,
                SSM_GitSha='b'*40)
     return env
 
@@ -114,6 +114,7 @@ def test_artifacts_require_checksum_and_matching_sha_and_old_agents_fail_closed(
     script = preflight(doc['mainSteps'][0]['inputs']['runCommand'][0])
     env = valid_environment(doc)
     assert shell(script, env).returncode == 88
+    env['SSM_ArtifactSha256'] = ''
     env['SSM_ArtifactS3Uri'] = 's3://shipsafe-artifacts-542468167362-us-east-1/releases/'+'b'*40+'/shipsafe-release.tar.gz'
     assert shell(script, env).returncode == 1
     env['SSM_ArtifactSha256'] = 'a'*64
@@ -164,7 +165,7 @@ def test_iam_and_first_boot_dependencies_are_scoped(offline_plan):
     assert 'Condition' not in statements['SSMSendDocument']
     assert statements['SSMSendTaggedInstance']['Condition']['StringEquals'] == {'ssm:resourceTag/Project':'ShipSafe'}
     logs = json.loads(offline_plan['aws_iam_policy.cloudwatch_write']['policy'])['Statement'][0]
-    assert len(logs['Resource']) == 5 and 'logs:CreateLogGroup' not in logs['Action']
+    assert len(logs['Resource']) == 5 and 'logs:CreateLogGroup' in logs['Action']
     ec2 = (MAIN / 'ec2.tf').read_text()
     for dependency in ['ec2_ssm_managed','ec2_ecr_pull','ec2_cloudwatch','ec2_ssm_secrets','ec2_s3_artifacts',
                        'aws_route_table_association.public','aws_vpc_security_group_egress_rule.all_outbound']:

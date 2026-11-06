@@ -42,6 +42,13 @@ resource "aws_ssm_document" "deploy" {
     schemaVersion = "2.2"
     description   = "Deploy or rollback a ShipSafe release on the target EC2 instance."
     parameters = {
+      Operation = {
+        type              = "String"
+        interpolationType = "ENV_VAR"
+        allowedPattern    = "^(bootstrap|deploy)$"
+        default           = "deploy"
+        description       = "Explicit first-release bootstrap or subsequent blue/green deployment"
+      }
       ImageRef = {
         type              = "String"
         interpolationType = "ENV_VAR"

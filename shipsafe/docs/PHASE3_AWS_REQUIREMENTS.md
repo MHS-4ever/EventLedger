@@ -34,11 +34,10 @@ ECS, EKS, ALB, RDS, and CodeDeploy remain outside this project architecture.
   `s3://<that-bucket>/<artifact_release_prefix>/<40-char-sha>/shipsafe-release.tar.gz`.
   Terraform creates the encrypted, versioned, public-blocked bucket and limits
   both publisher and host IAM permissions to that prefix.
-- The repository does not yet contain an executable GitHub publisher workflow.
-  That workflow is a remaining Phase 3B prerequisite: it must assume the
-  branch-scoped role, publish the archive and checksum to the approved prefix,
-  push the image to the single ECR repository, resolve its digest, and invoke
-  the constrained SSM document. Do not treat the bucket alone as publication.
+- The repository now contains main-only CI/release workflows, deterministic
+  release packaging and explicit SSM bootstrap/deploy operations. They remain
+  local on feature/shipsafe until separately reviewed/merged; no remote workflow
+  or AWS deployment result is implied. See the Phase 3C runbook.
 - Production deployment trust remains restricted to `main`, even during
   infrastructure review on `feature/shipsafe`. GitHub API verification confirms
   immutable subject prefix `repo:MHS-4ever@112760992/EventLedger@1438492915`;

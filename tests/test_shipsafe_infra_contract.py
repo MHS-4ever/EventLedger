@@ -13,7 +13,7 @@ def test_ssm_uses_environment_interpolation_without_inline_tokens():
     assert "{{ ImageRef }}" not in SSM
     assert "{{ ArtifactS3Uri }}" not in SSM
     assert "{{ ReleaseId }}" not in SSM
-    assert SSM.count('interpolationType = "ENV_VAR"') == 8
+    assert SSM.count('interpolationType = "ENV_VAR"') == 9
 
 
 def test_image_reference_contract_rejects_foreign_and_injected_values():
@@ -76,3 +76,10 @@ def test_managed_ssm_policy_cannot_expand_runtime_parameter_scope():
     assert re.search(r'Sid\s*=\s*"DenyParameterReadsOutsideRuntime"', IAM)
     assert re.search(r'NotResource\s*=\s*\[', IAM)
     assert ':parameter/shipsafe/runtime"' in IAM
+
+
+def test_publisher_can_reuse_ecr_digest_and_ssm_can_discover_log_groups():
+    push = IAM.split('resource "aws_iam_policy" "ecr_push"', 1)[1].split('resource "aws_iam_policy" "ssm_deploy"', 1)[0]
+    assert 'ecr:GetDownloadUrlForLayer' in push
+    assert 'Resource = aws_ecr_repository.shipsafe.arn' in push
+    assert 'logs:DescribeLogGroups' in IAM

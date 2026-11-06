@@ -278,12 +278,24 @@ class Controller:
         runtime_env: Path,
         runner: Runner | None = None,
         project_name: str = DEFAULT_PROJECT,
+        production_config: Path | None = None,
     ) -> None:
         self.root = root.resolve()
         self.shipsafe_dir = self.root / "shipsafe"
         self.runtime_dir = runtime_dir.resolve()
         self.runtime_env = runtime_env.resolve()
-        self.compose_file = self.shipsafe_dir / "compose.yaml"
+        self.production = production_config is not None
+        self.production_settings = {}
+        if production_config is not None:
+            self.production_settings = json.loads(production_config.read_text(encoding="utf-8"))
+            domain = self.production_settings.get("domain", "")
+            if not re.fullmatch(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}", domain):
+                raise ShipSafeError("production requires an approved DNS hostname")
+            if self.production_settings.get("region") != "us-east-1":
+                raise ShipSafeError("production configuration has an unapproved Region")
+            if self.production_settings.get("log_group") != "/shipsafe/production":
+                raise ShipSafeError("production configuration has an unapproved log group")
+        self.compose_file = self.shipsafe_dir / ("compose.production.yaml" if self.production else "compose.yaml")
         self.project_name = project_name
         self.runner = runner or Runner()
         self.store = StateStore(self.runtime_dir)
@@ -369,6 +381,12 @@ class Controller:
             ),
             "SHIPSAFE_RUNTIME_DIR": self.runtime_dir.as_posix(),
         }
+        if self.production:
+            values.update({
+                "SHIPSAFE_DOMAIN": self.production_settings["domain"],
+                "AWS_REGION": self.production_settings["region"],
+                "SHIPSAFE_LOG_GROUP": self.production_settings["log_group"],
+            })
         lines = []
         for name, value in values.items():
             if "\n" in value or "\r" in value:
@@ -385,6 +403,12 @@ class Controller:
         normalized_sha = git_sha.lower()
         if not re.fullmatch(r"[0-9a-f]{7,64}", normalized_sha):
             raise ShipSafeError("git SHA must be 7-64 hexadecimal characters")
+        if self.production:
+            if not re.fullmatch(r"542468167362\.dkr\.ecr\.us-east-1\.amazonaws\.com/shipsafe/eventledger@sha256:[0-9a-f]{64}", image):
+                raise ShipSafeError("production image must be the approved ECR digest")
+            revision = self.runner.run(["docker", "image", "inspect", "--format", '{{index .Config.Labels "org.opencontainers.image.revision"}}', image]).stdout.strip()
+            if revision != normalized_sha:
+                raise ShipSafeError("image revision does not match release source")
         inspected = self.runner.run(
             ["docker", "image", "inspect", "--format", "{{.Id}}", image]
         ).stdout.strip()
@@ -422,6 +446,7 @@ class Controller:
             "git_sha": normalized_sha,
             "image_id": inspected,
             "image_ref": immutable_ref,
+            "source_image_ref": image,
             "created_at": utc_now(),
             "schema_mode": "legacy",
             "legacy_revision": LEGACY_REVISION,
@@ -452,6 +477,18 @@ class Controller:
     def _caddy_text(self, slot: str) -> str:
         if slot not in VALID_SLOTS:
             raise ShipSafeError("invalid Caddy slot")
+        if self.production:
+            domain = self.production_settings["domain"]
+            return (
+                "{\n    admin localhost:2019\n}\n\n"
+                "http://:8080 {\n    bind 0.0.0.0\n"
+                f"    reverse_proxy api-{slot}:8000\n}}\n\n"
+                f"{domain} {{\n    encode gzip\n"
+                "    log {\n        format filter {\n            wrap json\n            fields {\n"
+                "                request>headers delete\n                request>uri delete\n                resp_headers delete\n"
+                "            }\n        }\n    }\n"
+                f"    reverse_proxy api-{slot}:8000\n}}\n"
+            ).replace("    ", "\t")
         return (
             "{\n"
             "    admin localhost:2019\n"
@@ -771,7 +808,9 @@ class Controller:
     ) -> None:
         with HostLock(self.runtime_dir / "deploy.lock"):
             state = self.store.load(required=False)
-            if state.get("active_release"):
+            pending = state.get("deployment") or {}
+            retry_failed_bootstrap = pending.get("operation") == "bootstrap" and pending.get("phase") == "failed"
+            if state.get("active_release") and not retry_failed_bootstrap:
                 raise ShipSafeError("ShipSafe is already bootstrapped")
             manifest = self._register_release(image, git_sha)
             release_id = manifest["release_id"]
@@ -798,6 +837,10 @@ class Controller:
                 )
                 self._wait_candidate("blue", ready_timeout)
                 self._candidate_auth_smoke("blue")
+                if self.production:
+                    self._compose("up", "-d", "--no-deps", "--force-recreate", "api-green")
+                    self._wait_candidate("green", ready_timeout)
+                    self._candidate_auth_smoke("green")
                 self._compose("up", "-d", "--no-deps", "caddy")
                 self._wait_proxy(ready_timeout)
                 self._compose(
@@ -809,6 +852,7 @@ class Controller:
                 )
             except Exception as error:
                 reason = sanitize_reason(error)
+                self._compose("stop", "worker", "caddy", "api-blue", "api-green", check=False)
                 manifest["status"] = "bootstrap_failed"
                 manifest["failure_reason"] = reason
                 self.store.save_release(manifest)
@@ -1217,6 +1261,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--runtime-env", type=Path, required=True)
     parser.add_argument("--project-name", default=DEFAULT_PROJECT)
+    parser.add_argument("--production-config", type=Path)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     bootstrap = subparsers.add_parser("bootstrap")
@@ -1266,6 +1311,7 @@ def main() -> int:
             runtime_dir=arguments.runtime_dir,
             runtime_env=arguments.runtime_env,
             project_name=arguments.project_name,
+            production_config=arguments.production_config,
         )
         if arguments.command == "bootstrap":
             controller.bootstrap(

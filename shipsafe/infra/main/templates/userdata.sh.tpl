@@ -314,5 +314,9 @@ mkdir -p /opt/shipsafe
 
 echo "=== ShipSafe userdata complete: $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 
+mkdir -p /etc/shipsafe
+printf '%s' '${deployment_config_base64}' | base64 -d > /etc/shipsafe/deployment.json
+chmod 0644 /etc/shipsafe/deployment.json
+
 # SSM documents reject deployments until every bootstrap step succeeds.
 touch /var/lib/shipsafe-bootstrap.ready
