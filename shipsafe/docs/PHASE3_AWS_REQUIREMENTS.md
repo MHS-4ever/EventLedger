@@ -39,12 +39,15 @@ ECS, EKS, ALB, RDS, and CodeDeploy remain outside this project architecture.
   branch-scoped role, publish the archive and checksum to the approved prefix,
   push the image to the single ECR repository, resolve its digest, and invoke
   the constrained SSM document. Do not treat the bucket alone as publication.
-- During feature review, set `deploy_branch = "feature/shipsafe"`. The resulting
-  OIDC subject is branch-specific. A reviewed plan for eventual production must
-  deliberately change it to `main` (or a protected GitHub Environment); one
-  role never trusts both branches implicitly.
+- Production deployment trust remains restricted to `main`, even during
+  infrastructure review on `feature/shipsafe`. GitHub API verification confirms
+  immutable subject prefix `repo:MHS-4ever@112760992/EventLedger@1438492915`;
+  the only production qualifier is `ref:refs/heads/main`, with audience
+  `sts.amazonaws.com`. Do not enable classic subject fallback.
 - Docker is stopped immediately after package installation and cannot start
   until `/data/shipsafe` is mounted and its canary names the expected EBS volume.
   If the attachment misses the first-boot wait, user data fails and Docker stays
   stopped. The `nofail` mount keeps the host reachable for SSM repair while the
   Docker systemd guard prevents PostgreSQL from falling back to the root disk.
+
+See [Phase 3B.1 readiness review](PHASE3B1_READINESS.md) for first-boot prerequisites, remaining release blockers, state locking and costs.

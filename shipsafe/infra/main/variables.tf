@@ -22,6 +22,11 @@ variable "project_prefix" {
   description = "Short prefix used in all resource names and tags."
   type        = string
   default     = "shipsafe"
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]*$", var.project_prefix))
+    error_message = "project_prefix must contain only lowercase letters, digits and hyphens, starting with a letter."
+  }
 }
 
 variable "environment" {
@@ -61,6 +66,16 @@ variable "availability_zone_suffix" {
 # ---------------------------------------------------------------------------
 # EC2 compute
 # ---------------------------------------------------------------------------
+
+variable "ami_id" {
+  description = "Explicitly approved Amazon Linux 2023 x86_64 AMI ID. AMI IDs are Region-specific; verify availability and ownership in aws_region before planning."
+  type        = string
+
+  validation {
+    condition     = can(regex("^ami-([0-9a-f]{8}|[0-9a-f]{17})$", var.ami_id))
+    error_message = "ami_id must be an AMI ID: ami- followed by 8 or 17 lowercase hexadecimal characters."
+  }
+}
 
 variable "instance_type" {
   description = <<-EOT
@@ -218,6 +233,11 @@ variable "alarm_email" {
   description = "Email address for CloudWatch alarm notifications and AWS Budget alerts. Leave empty to skip."
   type        = string
   default     = ""
+
+  validation {
+    condition     = var.alarm_email == "" || can(regex("^[^@[:space:]]+@[^@[:space:]]+[.][^@[:space:]]+$", var.alarm_email))
+    error_message = "alarm_email must be empty or a valid notification email address."
+  }
 }
 
 variable "monthly_budget_usd" {

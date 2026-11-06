@@ -95,11 +95,12 @@ output "deployment_prerequisites" {
          /shipsafe/runtime/POSTGRES_USER
          /shipsafe/runtime/EVENTLEDGER_API_KEY
          /shipsafe/runtime/EVENTLEDGER_SOURCE_ID
-    5. Mount and format the EBS data volume: /dev/xvdf → /data/shipsafe
+    5. Verify cloud-init completed and the exact EBS volume is mounted at /data/shipsafe; never manually format an existing volume.
     6. Configure Docker Compose to use /data/shipsafe for the postgres volume.
     7. Point ${var.domain_name != "" ? var.domain_name : "<your domain>"} A record to: ${aws_instance.shipsafe.public_ip}
     8. Confirm outbound connectivity to ECR, SSM, and CloudWatch endpoints.
     9. Push the EventLedger image to ECR: ${local.ecr_repo_url}
-    10. Run the SSM bootstrap command via GitHub Actions deploy workflow.
+    10. Verify SSM Agent >= 3.3.2746.0 and /var/lib/shipsafe-bootstrap.ready exists.
+    11. Implement and review the publisher and first-release bootstrap workflow before deployment (not supplied by this stack).
   EOT
 }

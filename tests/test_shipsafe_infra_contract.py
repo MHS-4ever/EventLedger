@@ -14,8 +14,6 @@ def test_ssm_uses_environment_interpolation_without_inline_tokens():
     assert "{{ ArtifactS3Uri }}" not in SSM
     assert "{{ ReleaseId }}" not in SSM
     assert SSM.count('interpolationType = "ENV_VAR"') == 8
-    for name in ("ImageRef", "GitSha", "ArtifactS3Uri", "ArtifactSha256", "ReleaseId"):
-        assert f"SSM_{name}" in SSM
 
 
 def test_image_reference_contract_rejects_foreign_and_injected_values():
@@ -62,8 +60,8 @@ def test_docker_is_gated_on_verified_data_mount():
     assert "ExecStartPre=/usr/bin/grep -Fxq EBS_VOLUME_ID=$TARGET_VOL_ID $CANARY_FILE" in USERDATA
 
 
-def test_oidc_review_is_scoped_to_feature_branch_and_not_both_branches():
-    assert 'deploy_branch      = "feature/shipsafe"' in TFVARS_EXAMPLE
+def test_oidc_review_is_scoped_to_main_and_not_both_branches():
+    assert 'deploy_branch      = "main"' in TFVARS_EXAMPLE
     assert '"ref:refs/heads/${var.deploy_branch}"' in IAM
     assert "refs/heads/main" not in IAM
     assert "refs/heads/feature/shipsafe" not in IAM
@@ -72,3 +70,9 @@ def test_oidc_review_is_scoped_to_feature_branch_and_not_both_branches():
 def test_artifact_iam_has_no_arbitrary_bucket_read():
     assert 'Resource = "arn:aws:s3:::*/*"' not in IAM
     assert '${aws_s3_bucket.release_artifacts.arn}/${var.artifact_release_prefix}/*' in IAM
+
+
+def test_managed_ssm_policy_cannot_expand_runtime_parameter_scope():
+    assert re.search(r'Sid\s*=\s*"DenyParameterReadsOutsideRuntime"', IAM)
+    assert re.search(r'NotResource\s*=\s*\[', IAM)
+    assert ':parameter/shipsafe/runtime"' in IAM

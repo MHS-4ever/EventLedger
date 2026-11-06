@@ -45,8 +45,7 @@ data "tls_certificate" "github" {
 resource "aws_iam_openid_connect_provider" "github" {
   url = "https://token.actions.githubusercontent.com"
 
-  # GitHub's OIDC thumbprint.  Fetched dynamically; falls back to the known
-  # value if the TLS data source is unavailable during plan.
+  # GitHub's OIDC thumbprint is fetched dynamically; there is no offline fallback.
   thumbprint_list = [data.tls_certificate.github.certificates[0].sha1_fingerprint]
 
   # sts.amazonaws.com is the correct audience for AWS STS AssumeRoleWithWebIdentity.
@@ -158,22 +157,21 @@ resource "aws_iam_policy" "ssm_deploy" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "SSMSendCommand"
+        Sid    = "SSMSendDocument"
         Effect = "Allow"
         Action = "ssm:SendCommand"
         Resource = [
-          # Strictly restricted to ShipSafe custom SSM documents (never arbitrary shell)
-          "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:document/${var.project_prefix}-deploy",
-          "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:document/${var.project_prefix}-status",
-          "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:document/${var.project_prefix}-rollback",
-          # Only EC2 instances tagged with the project.
-          "arn:aws:ec2:${var.aws_region}:${data.aws_caller_identity.current.account_id}:instance/*",
+          aws_ssm_document.deploy.arn,
+          aws_ssm_document.status.arn,
+          aws_ssm_document.rollback.arn,
         ]
-        Condition = {
-          StringEquals = {
-            "ssm:resourceTag/Project" = "ShipSafe"
-          }
-        }
+      },
+      {
+        Sid       = "SSMSendTaggedInstance"
+        Effect    = "Allow"
+        Action    = "ssm:SendCommand"
+        Resource  = "arn:aws:ec2:${var.aws_region}:${data.aws_caller_identity.current.account_id}:instance/*"
+        Condition = { StringEquals = { "ssm:resourceTag/Project" = "ShipSafe" } }
       },
       {
         Sid    = "SSMGetCommandResult"
@@ -283,12 +281,15 @@ resource "aws_iam_policy" "cloudwatch_write" {
         Sid    = "CloudWatchLogs"
         Effect = "Allow"
         Action = [
-          "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents",
           "logs:DescribeLogStreams",
         ]
-        Resource = "${aws_cloudwatch_log_group.shipsafe.arn}:*"
+        Resource = [
+          for group in [aws_cloudwatch_log_group.shipsafe, aws_cloudwatch_log_group.api,
+            aws_cloudwatch_log_group.worker, aws_cloudwatch_log_group.controller,
+          aws_cloudwatch_log_group.caddy] : "${group.arn}:*"
+        ]
       },
       {
         Sid      = "CloudWatchMetrics"
@@ -353,7 +354,21 @@ resource "aws_iam_policy" "ssm_read_secrets" {
           "ssm:GetParameters",
           "ssm:GetParametersByPath",
         ]
-        Resource = "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/shipsafe/runtime/*"
+        Resource = [
+          "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/shipsafe/runtime",
+          "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/shipsafe/runtime/*",
+        ]
+      },
+      {
+        # AmazonSSMManagedInstanceCore also allows GetParameter(s) on '*'.
+        # Explicit deny keeps that managed policy from expanding secret access.
+        Sid    = "DenyParameterReadsOutsideRuntime"
+        Effect = "Deny"
+        Action = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"]
+        NotResource = [
+          "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/shipsafe/runtime",
+          "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/shipsafe/runtime/*",
+        ]
       },
       {
         Sid    = "KMSDecryptSSM"
@@ -364,8 +379,6 @@ resource "aws_iam_policy" "ssm_read_secrets" {
         ]
         Resource = [
           aws_kms_key.parameter_store.arn,
-          # Fallback support for AWS managed SSM key if parameters are encrypted with alias/aws/ssm
-          "arn:aws:kms:${var.aws_region}:${data.aws_caller_identity.current.account_id}:alias/aws/ssm",
         ]
         Condition = {
           StringEquals = {

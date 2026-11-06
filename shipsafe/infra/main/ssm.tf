@@ -1,3 +1,11 @@
+locals {
+  ssm_image_pattern    = "^${data.aws_caller_identity.current.account_id}\\.dkr\\.ecr\\.${replace(var.aws_region, ".", "\\.")}\\.amazonaws\\.com/${aws_ecr_repository.shipsafe.name}@sha256:[0-9a-f]{64}$"
+  ssm_artifact_pattern = "^(s3://${replace(var.artifact_bucket_name, ".", "\\.")}/${var.artifact_release_prefix}/[0-9a-f]{40}/shipsafe-release\\.tar\\.gz)?$"
+  ssm_guard = replace(templatefile("${path.module}/templates/ssm-guard.sh.tpl", {
+    ebs_volume_id = aws_ebs_volume.data.id
+  }), "\r\n", "\n")
+}
+
 ################################################################################
 # SSM Documents for controlled remote execution
 #
@@ -38,7 +46,7 @@ resource "aws_ssm_document" "deploy" {
         type              = "String"
         interpolationType = "ENV_VAR"
         description       = "ECR digest reference: <registry>/<repo>@sha256:<digest>"
-        allowedPattern    = "^${data.aws_caller_identity.current.account_id}\\.dkr\\.ecr\\.${var.aws_region}\\.amazonaws\\.com/${aws_ecr_repository.shipsafe.name}@sha256:[0-9a-f]{64}$"
+        allowedPattern    = local.ssm_image_pattern
       }
       GitSha = {
         type              = "String"
@@ -50,28 +58,28 @@ resource "aws_ssm_document" "deploy" {
         type              = "String"
         interpolationType = "ENV_VAR"
         description       = "Readiness timeout in seconds (60–300)"
-        allowedPattern    = "^[1-9][0-9]{1,2}$"
+        allowedPattern    = "^(6[0-9]|[7-9][0-9]|[12][0-9]{2}|300)$"
         default           = "120"
       }
       WorkerTimeout = {
         type              = "String"
         interpolationType = "ENV_VAR"
         description       = "Worker verification timeout in seconds (30–180)"
-        allowedPattern    = "^[1-9][0-9]{1,2}$"
+        allowedPattern    = "^([3-9][0-9]|1[0-7][0-9]|180)$"
         default           = "90"
       }
       ObservationSeconds = {
         type              = "String"
         interpolationType = "ENV_VAR"
         description       = "Post-promotion observation window in seconds (5–60)"
-        allowedPattern    = "^[1-9][0-9]?$"
+        allowedPattern    = "^([5-9]|[1-5][0-9]|60)$"
         default           = "15"
       }
       ArtifactS3Uri = {
         type              = "String"
         interpolationType = "ENV_VAR"
         description       = "Optional versioned release artifact in the explicitly approved bucket and prefix"
-        allowedPattern    = "^(s3://${replace(var.artifact_bucket_name, ".", "\\.")}/${var.artifact_release_prefix}/[0-9a-f]{40}/shipsafe-release\\.tar\\.gz)?$"
+        allowedPattern    = local.ssm_artifact_pattern
         default           = ""
       }
       ArtifactSha256 = {
@@ -84,27 +92,18 @@ resource "aws_ssm_document" "deploy" {
     }
     mainSteps = [
       {
-        action = "aws:runShellScript"
-        name   = "RunShipSafeDeploy"
+        precondition = { StringEquals = ["platformType", "Linux"] }
+        action       = "aws:runShellScript"
+        name         = "RunShipSafeDeploy"
         inputs = {
-          runCommand = [
-            "set -euo pipefail",
-            "if [ ! -f /data/shipsafe/.shipsafe_ebs_mounted ]; then echo 'FATAL: /data/shipsafe/.shipsafe_ebs_mounted missing! Refusing deployment to prevent data loss on root disk.' >&2; exit 1; fi",
-            "TARGET_IMAGE_REF=\"$${SSM_ImageRef}\"",
-            "TARGET_GIT_SHA=\"$${SSM_GitSha}\"",
-            "TARGET_READY_TIMEOUT=\"$${SSM_ReadyTimeout}\"",
-            "TARGET_WORKER_TIMEOUT=\"$${SSM_WorkerTimeout}\"",
-            "TARGET_OBS_SECONDS=\"$${SSM_ObservationSeconds}\"",
-            "TARGET_ARTIFACT_URI=\"$${SSM_ArtifactS3Uri}\"",
-            "TARGET_ARTIFACT_SHA=\"$${SSM_ArtifactSha256}\"",
-            "RUNTIME_ENV=/data/shipsafe/runtime.env",
-            "if [ ! -f \"$RUNTIME_ENV\" ]; then echo 'runtime.env not found; synchronizing from SSM Parameter Store...' >&2; /usr/local/bin/shipsafe-fetch-secrets; fi",
-            "if [ -n \"$TARGET_ARTIFACT_URI\" ]; then echo \"Fetching release artifact: $TARGET_ARTIFACT_URI\"; aws s3 cp \"$TARGET_ARTIFACT_URI\" /tmp/shipsafe-artifact.tar.gz; if [ -n \"$TARGET_ARTIFACT_SHA\" ]; then printf '%s  /tmp/shipsafe-artifact.tar.gz\\n' \"$TARGET_ARTIFACT_SHA\" | sha256sum -c -; fi; mkdir -p /opt/shipsafe; tar -xzf /tmp/shipsafe-artifact.tar.gz -C /opt/shipsafe; rm -f /tmp/shipsafe-artifact.tar.gz; fi",
-            "aws ecr get-login-password --region ${var.aws_region} | docker login --username AWS --password-stdin ${local.ecr_registry_url}",
-            "docker pull \"$TARGET_IMAGE_REF\"",
-            "cd /opt/shipsafe && python3 controller.py --runtime-env \"$RUNTIME_ENV\" --runtime-dir /data/shipsafe/runtime deploy --image \"$TARGET_IMAGE_REF\" --git-sha \"$TARGET_GIT_SHA\" --ready-timeout \"$TARGET_READY_TIMEOUT\" --worker-timeout \"$TARGET_WORKER_TIMEOUT\" --observation-seconds \"$TARGET_OBS_SECONDS\"",
-          ]
-          timeoutSeconds = 600
+          runCommand = [replace(templatefile("${path.module}/templates/ssm-deploy.sh.tpl", {
+            guard            = local.ssm_guard
+            image_pattern    = local.ssm_image_pattern
+            artifact_pattern = local.ssm_artifact_pattern
+            aws_region       = var.aws_region
+            ecr_registry     = local.ecr_registry_url
+          }), "\r\n", "\n")]
+          timeoutSeconds = 1800
         }
       }
     ]
@@ -124,14 +123,13 @@ resource "aws_ssm_document" "status" {
     parameters    = {}
     mainSteps = [
       {
-        action = "aws:runShellScript"
-        name   = "RunShipSafeStatus"
+        precondition = { StringEquals = ["platformType", "Linux"] }
+        action       = "aws:runShellScript"
+        name         = "RunShipSafeStatus"
         inputs = {
-          runCommand = [
-            "set -euo pipefail",
-            "if [ ! -f /data/shipsafe/.shipsafe_ebs_mounted ]; then echo 'FATAL: /data/shipsafe/.shipsafe_ebs_mounted missing!' >&2; exit 1; fi",
-            "cd /opt/shipsafe && python3 controller.py --runtime-env /data/shipsafe/runtime.env --runtime-dir /data/shipsafe/runtime status",
-          ]
+          runCommand = [replace(templatefile("${path.module}/templates/ssm-status.sh.tpl", {
+            guard = local.ssm_guard
+          }), "\r\n", "\n")]
           timeoutSeconds = 30
         }
       }
@@ -154,24 +152,20 @@ resource "aws_ssm_document" "rollback" {
         type              = "String"
         interpolationType = "ENV_VAR"
         description       = "Explicit release ID to roll back to, or empty for automatic previous."
-        allowedPattern    = "^([0-9a-f]+-[0-9a-f]+)?$"
+        allowedPattern    = "^([0-9a-f]{12}-[0-9a-f]{12})?$"
         default           = ""
       }
     }
     mainSteps = [
       {
-        action = "aws:runShellScript"
-        name   = "RunShipSafeRollback"
+        precondition = { StringEquals = ["platformType", "Linux"] }
+        action       = "aws:runShellScript"
+        name         = "RunShipSafeRollback"
         inputs = {
-          runCommand = [
-            "set -euo pipefail",
-            "if [ ! -f /data/shipsafe/.shipsafe_ebs_mounted ]; then echo 'FATAL: /data/shipsafe/.shipsafe_ebs_mounted missing!' >&2; exit 1; fi",
-            "TARGET_RELEASE_ID=\"$${SSM_ReleaseId}\"",
-            "RELEASE_ARG=\"\"",
-            "if [ -n \"$TARGET_RELEASE_ID\" ]; then RELEASE_ARG=\"--release-id $TARGET_RELEASE_ID\"; fi",
-            "cd /opt/shipsafe && python3 controller.py --runtime-env /data/shipsafe/runtime.env --runtime-dir /data/shipsafe/runtime rollback $RELEASE_ARG",
-          ]
-          timeoutSeconds = 300
+          runCommand = [replace(templatefile("${path.module}/templates/ssm-rollback.sh.tpl", {
+            guard = local.ssm_guard
+          }), "\r\n", "\n")]
+          timeoutSeconds = 1800
         }
       }
     ]

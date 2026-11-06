@@ -6,6 +6,8 @@
 # Required — no defaults
 # ---------------------------------------------------------------------------
 aws_region         = "CHANGE_ME"   # e.g. us-east-1  (confirm pricing before provisioning)
+# Approved for us-east-1 only; reverify the AMI when changing Region.
+ami_id = "ami-0c230065b91270bc6"
 github_repository  = "CHANGE_ME"   # e.g. myorg/eventledger
 artifact_bucket_name = "CHANGE_ME" # explicitly approved, globally unique bucket
 artifact_release_prefix = "releases"
@@ -21,8 +23,8 @@ github_repository_id = "1438492915"  # EventLedger repository ID
 # Deployment identity — choose branch OR environment trust (not both)
 # ---------------------------------------------------------------------------
 # Option A: branch-scoped trust (simpler; no GitHub Environments required)
-# Phase 3B review: use feature/shipsafe. Change to main only after merge/review.
-deploy_branch      = "feature/shipsafe"
+# Production trust stays on main even when Terraform is reviewed on feature/shipsafe.
+deploy_branch      = "main"
 deploy_environment = ""
 
 # Option B: environment-scoped trust (recommended for production)
@@ -38,6 +40,8 @@ domain_name = ""   # e.g. api.example.com  — leave empty until DNS is ready
 # ---------------------------------------------------------------------------
 # Notifications / cost
 # ---------------------------------------------------------------------------
+# Non-secret; alternatively omit this assignment and set TF_VAR_alarm_email.
+# An assignment here takes precedence over TF_VAR_alarm_email. Confirm SNS email subscription.
 alarm_email        = ""    # e.g. you@example.com
 monthly_budget_usd = "30"  # notification-only; does not stop resources
 

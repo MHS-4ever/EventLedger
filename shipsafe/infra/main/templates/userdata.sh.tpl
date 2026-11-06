@@ -18,6 +18,7 @@
 #   ${project_prefix} — project prefix for naming
 
 set -euo pipefail
+rm -f /var/lib/shipsafe-bootstrap.ready
 
 LOG=/var/log/shipsafe-userdata.log
 exec >> "$LOG" 2>&1
@@ -31,6 +32,7 @@ dnf update -y
 dnf install -y \
   docker \
   amazon-cloudwatch-agent \
+  amazon-ssm-agent \
   python3 \
   python3-pip \
   git \
@@ -39,6 +41,14 @@ dnf install -y \
 # Package installation may auto-start Docker. Keep both activation paths
 # disabled until the dedicated EBS volume is mounted and verified.
 systemctl disable --now docker.service docker.socket || true
+
+# ENV_VAR interpolation requires SSM Agent >= 3.3.2746.0. Fail closed on old agents.
+SSM_VERSION=$(amazon-ssm-agent -version | awk '{print $NF}')
+if [ "$(printf '%s\n' 3.3.2746.0 "$SSM_VERSION" | sort -V | head -n1)" != "3.3.2746.0" ]; then
+  echo "FATAL: SSM Agent >= 3.3.2746.0 required" >&2
+  exit 1
+fi
+systemctl enable --now amazon-ssm-agent
 
 # ---------------------------------------------------------------------------
 # Docker Compose plugin
@@ -229,55 +239,7 @@ chmod 0700 "$DATA_MOUNT/backups"
 # ---------------------------------------------------------------------------
 
 cat > /usr/local/bin/shipsafe-fetch-secrets <<'SECRETS_SCRIPT'
-#!/usr/bin/env bash
-set -euo pipefail
-
-RUNTIME_DIR="/data/shipsafe"
-RUNTIME_ENV="$RUNTIME_DIR/runtime.env"
-
-# Guard: Ensure persistent EBS volume is mounted
-if [ ! -f "$RUNTIME_DIR/.shipsafe_ebs_mounted" ]; then
-  echo "FATAL: Persistent EBS data volume is not mounted! Refusing to write credentials." >&2
-  exit 1
-fi
-
-OLD_UMASK=$(umask)
-umask 077
-TMP_ENV=$(mktemp "$RUNTIME_DIR/.runtime.env.XXXXXX")
-
-echo "Fetching runtime credentials from SSM Parameter Store (/shipsafe/runtime/)..."
-aws ssm get-parameters-by-path \
-  --region "${aws_region}" \
-  --path "/shipsafe/runtime/" \
-  --with-decryption \
-  --query 'Parameters[*].[Name,Value]' \
-  --output text | while read -r name value; do
-    key=$(echo "$name" | sed 's|^/shipsafe/runtime/||')
-    printf '%s=%s\n' "$key" "$value" >> "$TMP_ENV"
-done
-
-# Validate required variables
-REQUIRED_VARS=(POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD EVENTLEDGER_API_KEY EVENTLEDGER_SOURCE_ID)
-MISSING=()
-
-for var_name in "$${REQUIRED_VARS[@]}"; do
-  if ! grep -q "^$${var_name}=" "$TMP_ENV" || grep -q "^$${var_name}=$" "$TMP_ENV"; then
-    MISSING+=("$var_name")
-  fi
-done
-
-if [ "$${#MISSING[@]}" -gt 0 ]; then
-  echo "FATAL: Required SSM parameters are missing or empty: $${MISSING[*]}" >&2
-  echo "Please provision these SecureString parameters under /shipsafe/runtime/ before starting services." >&2
-  rm -f "$TMP_ENV"
-  umask "$OLD_UMASK"
-  exit 1
-fi
-
-chmod 0600 "$TMP_ENV"
-mv "$TMP_ENV" "$RUNTIME_ENV"
-umask "$OLD_UMASK"
-echo "Successfully generated $RUNTIME_ENV with restricted permissions (0600)."
+${fetch_secrets_script}
 SECRETS_SCRIPT
 chmod +x /usr/local/bin/shipsafe-fetch-secrets
 
@@ -294,14 +256,12 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json <<CWCONF
           {
             "file_path": "/var/log/shipsafe-userdata.log",
             "log_group_name": "${cw_log_group}",
-            "log_stream_name": "{instance_id}/userdata",
-            "retention_in_days": 30
+            "log_stream_name": "{instance_id}/userdata"
           },
           {
             "file_path": "/var/log/messages",
             "log_group_name": "${cw_log_group}",
-            "log_stream_name": "{instance_id}/messages",
-            "retention_in_days": 30
+            "log_stream_name": "{instance_id}/messages"
           }
         ]
       }
@@ -353,3 +313,6 @@ chmod +x /usr/local/bin/ecr-login
 mkdir -p /opt/shipsafe
 
 echo "=== ShipSafe userdata complete: $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+
+# SSM documents reject deployments until every bootstrap step succeeds.
+touch /var/lib/shipsafe-bootstrap.ready

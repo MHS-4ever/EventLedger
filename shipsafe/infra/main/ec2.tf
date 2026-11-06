@@ -19,35 +19,15 @@
 ################################################################################
 
 # ---------------------------------------------------------------------------
-# Latest Amazon Linux 2023 AMI (official AWS-managed)
+# Explicitly approved Amazon Linux 2023 AMI (Region-specific).
 # ---------------------------------------------------------------------------
-
-data "aws_ami" "al2023" {
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["al2023-ami-2023*-x86_64"]
-  }
-
-  filter {
-    name   = "architecture"
-    values = ["x86_64"]
-  }
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-}
 
 # ---------------------------------------------------------------------------
 # EC2 instance
 # ---------------------------------------------------------------------------
 
 resource "aws_instance" "shipsafe" {
-  ami                    = data.aws_ami.al2023.id
+  ami                    = var.ami_id
   instance_type          = var.instance_type
   subnet_id              = aws_subnet.public.id
   vpc_security_group_ids = [aws_security_group.shipsafe.id]
@@ -73,18 +53,26 @@ resource "aws_instance" "shipsafe" {
   # in the Terraform state file (which is itself in S3).
   # Only install system packages and enable SSM/CloudWatch agents here.
   # Runtime credentials are delivered via SSM Parameter Store at deploy time.
-  user_data = base64encode(templatefile("${path.module}/templates/userdata.sh.tpl", {
-    aws_region     = var.aws_region
-    ecr_registry   = local.ecr_registry_url
-    cw_log_group   = aws_cloudwatch_log_group.shipsafe.name
-    project_prefix = var.project_prefix
-    ebs_volume_id  = aws_ebs_volume.data.id
-  }))
+  user_data = replace(templatefile("${path.module}/templates/userdata.sh.tpl", {
+    aws_region           = var.aws_region
+    ecr_registry         = local.ecr_registry_url
+    cw_log_group         = aws_cloudwatch_log_group.shipsafe.name
+    project_prefix       = var.project_prefix
+    ebs_volume_id        = aws_ebs_volume.data.id
+    fetch_secrets_script = templatefile("${path.module}/templates/fetch-secrets.py.tpl", { aws_region = var.aws_region, ebs_volume_id = aws_ebs_volume.data.id })
+  }), "\r\n", "\n")
 
   # Ensure the instance profile and log group exist before the instance boots.
   depends_on = [
     aws_iam_instance_profile.ec2,
     aws_cloudwatch_log_group.shipsafe,
+    aws_iam_role_policy_attachment.ec2_ssm_managed,
+    aws_iam_role_policy_attachment.ec2_ecr_pull,
+    aws_iam_role_policy_attachment.ec2_cloudwatch,
+    aws_iam_role_policy_attachment.ec2_ssm_secrets,
+    aws_iam_role_policy_attachment.ec2_s3_artifacts,
+    aws_route_table_association.public,
+    aws_vpc_security_group_egress_rule.all_outbound,
   ]
 
   tags = { Name = "${var.project_prefix}-host" }
