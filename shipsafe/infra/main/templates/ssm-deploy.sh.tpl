@@ -74,7 +74,7 @@ printf '%s' "$release_root" > /data/shipsafe/pending-release-root
 cd "$release_root"
 args=("$SSM_Operation" --image "$SSM_ImageRef" --git-sha "$SSM_GitSha" --ready-timeout "$SSM_ReadyTimeout" --worker-timeout "$SSM_WorkerTimeout")
 if [[ "$SSM_Operation" == deploy ]]; then args+=(--observation-seconds "$SSM_ObservationSeconds"); fi
-python3 shipsafe/controller.py --root "$release_root" --project-name shipsafe-production --production-config /etc/shipsafe/deployment.json --runtime-env "$RUNTIME_ENV" --runtime-dir /data/shipsafe/runtime "$${args[@]}"
+/usr/bin/python3.12 shipsafe/controller.py --root "$release_root" --project-name shipsafe-production --production-config /etc/shipsafe/deployment.json --runtime-env "$RUNTIME_ENV" --runtime-dir /data/shipsafe/runtime "$${args[@]}"
 printf '%s' "$release_root" > /data/shipsafe/.current-release-root.tmp
 mv /data/shipsafe/.current-release-root.tmp /data/shipsafe/current-release-root
 rm -f /data/shipsafe/pending-release-root
