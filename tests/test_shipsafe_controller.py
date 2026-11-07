@@ -328,6 +328,39 @@ def test_worker_failure_restores_worker_and_proxy(test_dir: Path) -> None:
     assert controller.actions.count("switch:blue") == 1
 
 
+def test_explicit_post_promotion_failure_retains_worker_and_same_sha_can_retry(test_dir,monkeypatch):
+    controller,_,_=harness(test_dir)
+    controller.runner.image_id=IMAGE_ID_B
+    # Use the real opt-in gate rather than the harness override.
+    monkeypatch.setattr(controller,'_fault_override',Controller._fault_override.__get__(controller))
+    monkeypatch.setenv('SHIPSAFE_ENABLE_FAILURE_INJECTION','1')
+    def observe(seconds):
+        controller.actions.append('observe')
+        if 'compose:stop:-t:10:api-green' in controller.actions:
+            raise ShipSafeError('promoted candidate stopped')
+    monkeypatch.setattr(controller,'_observe_proxy',observe)
+    kwargs=dict(image='eventledger:candidate',git_sha=GIT_SHA_B,ready_timeout=1,
+                observation_seconds=1,worker_timeout=1)
+    with pytest.raises(ShipSafeError,match='promoted candidate stopped'):
+        controller.deploy(failure_mode='post-promotion',**kwargs)
+    saved=controller.store.load()
+    failed_id=GIT_SHA_B[:12]+'-'+IMAGE_ID_B.removeprefix('sha256:')[:12]
+    assert saved['active_release']==saved['worker_release']=='old-release'
+    assert saved['active_slot']=='blue' and saved['deployment'] is None
+    assert saved['slot_releases']['green'] is None
+    assert controller.store.load_release(failed_id)['status']=='failed'
+    assert [a for a in controller.actions if a.startswith('switch:')]==['switch:green','switch:blue']
+    assert controller.actions.index('switch:green') < controller.actions.index('compose:stop:-t:10:api-green') < controller.actions.index('switch:blue')
+    assert 'proxy-smoke' in controller.actions
+    assert not any(a.startswith('compose:') and 'worker' in a for a in controller.actions)
+    controller.actions.clear()
+    monkeypatch.delenv('SHIPSAFE_ENABLE_FAILURE_INJECTION')
+    controller.deploy(failure_mode='none',**kwargs)
+    saved=controller.store.load()
+    assert saved['active_release']==saved['worker_release']==failed_id
+    assert saved['previous_release']=='old-release' and saved['deployment'] is None
+
+
 def test_repeated_active_release_is_idempotent(test_dir: Path) -> None:
     controller, state, _ = harness(test_dir)
     active = controller.store.load_release("old-release")

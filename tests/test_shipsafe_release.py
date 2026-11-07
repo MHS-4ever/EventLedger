@@ -217,7 +217,8 @@ def test_production_compose_expands_without_a_docker_daemon(tmp_path):
     assert result.returncode==0,result.stderr
 
 
-def test_complete_publisher_simulation_reuses_verified_digest_and_packages_commit(monkeypatch,tmp_path):
+@pytest.mark.parametrize('operation,failure_mode', [('bootstrap','none'),('deploy','none'),('deploy','post-promotion')])
+def test_complete_publisher_simulation_reuses_verified_digest_and_packages_commit(monkeypatch,tmp_path,operation,failure_mode):
     monkeypatch.chdir(tmp_path)
     for key,value in {'GITHUB_ACTIONS':'true','GITHUB_REF':'refs/heads/main','GITHUB_REPOSITORY':'MHS-4ever/EventLedger'}.items():
         monkeypatch.setenv(key,value)
@@ -250,14 +251,40 @@ def test_complete_publisher_simulation_reuses_verified_digest_and_packages_commi
     sent=[]
     monkeypatch.setattr(publisher,'dispatch',lambda *a: sent.append(a) or 'offline-command')
     monkeypatch.setattr(publisher,'verify_https',lambda domain:None)
-    args=argparse.Namespace(execute=True,operation='bootstrap',instance='i-'+'a'*17,
+    args=argparse.Namespace(execute=True,operation=operation,failure_mode=failure_mode,instance='i-'+'a'*17,
                             domain='offline.example.invalid',public_ip='192.0.2.1',release_id='')
     result=publisher.run(args)
     assert result['command_id']=='offline-command'
-    assert sent[0][2]['Operation']==['bootstrap'] and sent[0][2]['ImageRef']==[IMAGE]
+    assert sent[0][2]['Operation']==[operation] and sent[0][2]['ImageRef']==[IMAGE]
+    assert sent[0][2]['FailureMode']==[failure_mode]
     assert len(puts)==2 and all('--if-none-match' in p and '*' in p for p in puts)
     assert 'ephemeral-offline-token' not in json.dumps(result)
     assert not any('push' in c for c in commands)
+
+
+@pytest.mark.parametrize('operation,mode', [
+    ('bootstrap','post-promotion'),('status','post-promotion'),('rollback','post-promotion'),
+    ('deploy','candidate-startup'),('deploy','post-promotion;id'),('deploy',''),
+])
+@pytest.mark.parametrize('execute', [False,True])
+def test_publisher_rejects_failure_parameters_before_any_command(monkeypatch,operation,mode,execute):
+    monkeypatch.setattr(publisher,'command',lambda *a: pytest.fail('Command before validation'))
+    monkeypatch.setattr(publisher,'aws',lambda *a: pytest.fail('AWS before validation'))
+    with pytest.raises(ValueError):
+        publisher.run(argparse.Namespace(execute=execute,operation=operation,failure_mode=mode))
+
+
+def test_workflow_failure_mode_is_manual_and_validated_before_credentials():
+    workflow=yaml.load((ROOT/'.github/workflows/shipsafe-release.yml').read_text(),Loader=yaml.BaseLoader)
+    mode=workflow['on']['workflow_dispatch']['inputs']['failure_mode']
+    assert mode['type']=='choice' and mode['default']=='none'
+    assert mode['options']==['none','post-promotion']
+    steps=workflow['jobs']['publish']['steps']
+    validation=next(i for i,s in enumerate(steps) if s.get('name')=='Require deployment decisions')
+    credentials=next(i for i,s in enumerate(steps) if s.get('uses','').startswith('aws-actions/'))
+    assert validation < credentials
+    assert 'post-promotion) test "$RELEASE_OPERATION" = deploy' in steps[validation]['run']
+    assert '--failure-mode "$RELEASE_FAILURE_MODE"' in next(s['run'] for s in steps if s.get('name')=='Publish immutable release or operate verified release')
 
 def test_production_bootstrap_verifies_both_slots_before_independent_worker(tmp_path,monkeypatch):
     from shipsafe.controller import CommandResult

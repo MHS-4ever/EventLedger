@@ -49,6 +49,13 @@ resource "aws_ssm_document" "deploy" {
         default           = "deploy"
         description       = "Explicit first-release bootstrap or subsequent blue/green deployment"
       }
+      FailureMode = {
+        type              = "String"
+        interpolationType = "ENV_VAR"
+        allowedValues     = ["none", "post-promotion"]
+        default           = "none"
+        description       = "Manual rollback demonstration; post-promotion requires deploy"
+      }
       ImageRef = {
         type              = "String"
         interpolationType = "ENV_VAR"

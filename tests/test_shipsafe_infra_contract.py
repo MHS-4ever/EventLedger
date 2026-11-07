@@ -13,7 +13,7 @@ def test_ssm_uses_environment_interpolation_without_inline_tokens():
     assert "{{ ImageRef }}" not in SSM
     assert "{{ ArtifactS3Uri }}" not in SSM
     assert "{{ ReleaseId }}" not in SSM
-    assert SSM.count('interpolationType = "ENV_VAR"') == 9
+    assert SSM.count('interpolationType = "ENV_VAR"') == 10
 
 
 def test_image_reference_contract_rejects_foreign_and_injected_values():
