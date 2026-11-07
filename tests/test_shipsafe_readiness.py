@@ -72,7 +72,10 @@ def test_all_rendered_documents_have_safe_linux_shell_and_parameters(documents):
             assert param['interpolationType'] == 'ENV_VAR'
             assert f'SSM_{name}' in script
             if 'default' in param:
-                assert re.fullmatch(param['allowedPattern'], param['default']) is not None
+                if 'allowedValues' in param:
+                    assert param['default'] in param['allowedValues']
+                else:
+                    assert re.fullmatch(param['allowedPattern'], param['default']) is not None
 
 
 def valid_environment(doc):
@@ -86,6 +89,44 @@ def valid_environment(doc):
 def preflight(script):
     # Stop exactly before any host command, after the real runtime input checks.
     return script.split('if [ ! -x "/usr/bin/python3.12" ]; then', 1)[0] + "exit 88\nSHIPSAFE_SSM_BASH\n"
+
+
+@pytest.mark.parametrize('operation,mode,accepted', [
+    ('bootstrap','none',True),('deploy','none',True),('deploy','post-promotion',True),
+    ('bootstrap','post-promotion',False),('status','post-promotion',False),
+    ('deploy','candidate-startup',False),('deploy','$(id)',False),('deploy','',False),
+])
+def test_failure_mode_schema_and_runtime_gate(documents,operation,mode,accepted):
+    doc=documents['deploy']
+    assert doc['parameters']['FailureMode']['allowedValues']==['none','post-promotion']
+    assert doc['parameters']['FailureMode']['default']=='none'
+    env=valid_environment(doc)
+    env.update(SSM_Operation=operation,SSM_FailureMode=mode)
+    assert shell(preflight(doc['mainSteps'][0]['inputs']['runCommand'][0]),env).returncode==(88 if accepted else 1)
+
+
+@pytest.mark.parametrize('operation,mode', [('bootstrap','none'),('deploy','none'),('deploy','post-promotion')])
+def test_controller_failure_flag_is_invocation_only(documents,operation,mode):
+    doc=documents['deploy']
+    script=doc['mainSteps'][0]['inputs']['runCommand'][0]
+    # Exercise the rendered validation and exact controller invocation; skip host work.
+    validation=preflight(script).split("<<'SHIPSAFE_SSM_BASH'\n",1)[1].rsplit('exit 88',1)[0]
+    invocation=script.split('args=("$SSM_Operation"',1)[1].split("printf '%s' \"$release_root\"",1)[0]
+    invocation='args=("$SSM_Operation"'+invocation
+    env=valid_environment(doc)
+    env.update(SSM_Operation=operation,SSM_FailureMode=mode,SHIPSAFE_ENABLE_FAILURE_INJECTION='1')
+    spy='env() { command env "$@"; }\n'
+    # Replace only the executable, using Python to report environment and argv.
+    invocation=invocation.replace('/usr/bin/python3.12 shipsafe/controller.py',
+        "python -c 'import json,os,sys; print(json.dumps([os.getenv(\"SHIPSAFE_ENABLE_FAILURE_INJECTION\"),sys.argv[1:]]))'")
+    result=shell(validation+'\nrelease_root=/offline\nRUNTIME_ENV=/offline.env\n'+spy+invocation,env)
+    assert result.returncode==0,result.stderr
+    flag,args=json.loads(result.stdout)
+    assert flag==('1' if mode=='post-promotion' else None)
+    if operation=='deploy':
+        assert args[args.index('--failure-mode')+1]==mode
+    else:
+        assert '--failure-mode' not in args
 
 
 @pytest.mark.parametrize('parameter,valid,invalid', [
@@ -175,7 +216,7 @@ def test_iam_and_first_boot_dependencies_are_scoped(offline_plan):
 def test_production_controller_requires_explicit_python312(documents, offline_plan):
     for document in documents.values():
         script = document['mainSteps'][0]['inputs']['runCommand'][0]
-        interpreters = re.findall(r'(?m)^(\S+)\s+shipsafe/controller\.py\b', script)
+        interpreters = re.findall(r'(?m)^(?:env "\$\{controller_env\[@\]\}" )?(\S+)\s+shipsafe/controller\.py\b', script)
         assert interpreters == ['/usr/bin/python3.12']
         assert 'if [ ! -x "/usr/bin/python3.12" ]; then' in script
         assert script.index('if [ ! -x "/usr/bin/python3.12" ]; then') < script.index('mountpoint -q /data/shipsafe')

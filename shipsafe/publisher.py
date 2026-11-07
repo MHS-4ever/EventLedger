@@ -74,11 +74,16 @@ def verify_https(domain):
 
 
 def run(args):
+    failure_mode = getattr(args, 'failure_mode', 'none')
+    if failure_mode not in ('none', 'post-promotion'):
+        raise ValueError('Invalid failure mode')
+    if failure_mode != 'none' and args.operation != 'deploy':
+        raise ValueError('Failure injection is restricted to deploy')
     sha = command(['git','rev-parse','HEAD'])
     if not re.fullmatch('[0-9a-f]{40}', sha):
         raise ValueError('Invalid source SHA')
     summary = {'mode':'execute' if args.execute else 'dry-run', 'operation':args.operation,
-               'git_sha':sha, 'account':ACCOUNT, 'region':REGION,
+               'git_sha':sha, 'account':ACCOUNT, 'region':REGION, 'failure_mode':failure_mode,
                'steps':['verify main OIDC identity and DNS', 'build/test or reuse immutable sha image',
                         'resolve ECR digest', 'package committed allowlisted source',
                         'conditionally publish archive/checksum', 'send constrained SSM command',
@@ -139,7 +144,7 @@ def run(args):
             command(['aws','--region',REGION,'s3api','get-object','--bucket',BUCKET,'--key',object_key,str(prior)])
             if prior.read_bytes() != path.read_bytes():
                 raise RuntimeError('Immutable release artifact differs; use a new source commit')
-    parameters = {'Operation':[args.operation],'ImageRef':[image],'GitSha':[sha],
+    parameters = {'Operation':[args.operation],'FailureMode':[failure_mode],'ImageRef':[image],'GitSha':[sha],
                   'ArtifactS3Uri':['s3://'+BUCKET+'/'+key], 'ArtifactSha256':[release['artifact_sha256']]}
     summary.update(release)
     summary['command_id'] = dispatch(args.operation,args.instance,parameters)
@@ -155,6 +160,7 @@ def main():
     parser.add_argument('--domain',default=os.getenv('SHIPSAFE_DOMAIN'))
     parser.add_argument('--public-ip',default=os.getenv('SHIPSAFE_PUBLIC_IP'))
     parser.add_argument('--release-id',default='')
+    parser.add_argument('--failure-mode',choices=['none','post-promotion'],default='none')
     try:
         print(json.dumps(run(parser.parse_args()),sort_keys=True))
     except (RuntimeError,ValueError,OSError,KeyError,subprocess.CalledProcessError):

@@ -11,6 +11,12 @@ on:
         description: Optional verified rollback release ID
         type: string
         default: ''
+      failure_mode:
+        description: Manual rollback demonstration (post-promotion requires deploy)
+        type: choice
+        options: [none, post-promotion]
+        required: true
+        default: none
 permissions:
   contents: read
 concurrency:
@@ -36,6 +42,7 @@ jobs:
       SHIPSAFE_PUBLIC_IP: ${{ vars.SHIPSAFE_PUBLIC_IP }}
       RELEASE_OPERATION: ${{ inputs.operation }}
       ROLLBACK_RELEASE_ID: ${{ inputs.release_id }}
+      RELEASE_FAILURE_MODE: ${{ inputs.failure_mode }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -46,6 +53,11 @@ jobs:
       - name: Require deployment decisions
         shell: bash
         run: |
+          case "$RELEASE_FAILURE_MODE" in
+            none) ;;
+            post-promotion) test "$RELEASE_OPERATION" = deploy ;;
+            *) exit 1 ;;
+          esac
           test -n "$SHIPSAFE_INSTANCE_ID"
           test -n "$SHIPSAFE_DOMAIN"
           test -n "$SHIPSAFE_PUBLIC_IP"
@@ -58,7 +70,7 @@ jobs:
           role-duration-seconds: 3600
           role-session-name: shipsafe-${{ github.run_id }}
       - name: Publish immutable release or operate verified release
-        run: python -m shipsafe.publisher --execute --operation "$RELEASE_OPERATION" --release-id "$ROLLBACK_RELEASE_ID"
+        run: python -m shipsafe.publisher --execute --operation "$RELEASE_OPERATION" --release-id "$ROLLBACK_RELEASE_ID" --failure-mode "$RELEASE_FAILURE_MODE"
       - name: Clear runner registry credentials
         if: always()
         run: docker logout 542468167362.dkr.ecr.us-east-1.amazonaws.com || true

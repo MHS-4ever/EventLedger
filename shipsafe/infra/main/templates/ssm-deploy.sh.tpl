@@ -2,6 +2,10 @@
 exec /bin/bash <<'SHIPSAFE_SSM_BASH'
 set -euo pipefail
 [[ -v SSM_Operation && "$SSM_Operation" =~ ^(bootstrap|deploy)$ ]] || exit 1
+[[ -v SSM_FailureMode && "$SSM_FailureMode" =~ ^(none|post-promotion)$ ]] || exit 1
+[[ "$SSM_FailureMode" == none || "$SSM_Operation" == deploy ]] || exit 1
+# Never inherit a host-wide opt-in. Authorization is scoped to this invocation.
+unset SHIPSAFE_ENABLE_FAILURE_INJECTION
 # No inline parameter fallback: older SSM Agents must fail closed.
 : "$${SSM_ImageRef:?SSM Agent >= 3.3.2746.0 required}"
 : "$${SSM_GitSha:?missing GitSha}"
@@ -73,8 +77,14 @@ docker pull "$SSM_ImageRef"
 printf '%s' "$release_root" > /data/shipsafe/pending-release-root
 cd "$release_root"
 args=("$SSM_Operation" --image "$SSM_ImageRef" --git-sha "$SSM_GitSha" --ready-timeout "$SSM_ReadyTimeout" --worker-timeout "$SSM_WorkerTimeout")
-if [[ "$SSM_Operation" == deploy ]]; then args+=(--observation-seconds "$SSM_ObservationSeconds"); fi
-/usr/bin/python3.12 shipsafe/controller.py --root "$release_root" --project-name shipsafe-production --production-config /etc/shipsafe/deployment.json --runtime-env "$RUNTIME_ENV" --runtime-dir /data/shipsafe/runtime "$${args[@]}"
+if [[ "$SSM_Operation" == deploy ]]; then
+  args+=(--observation-seconds "$SSM_ObservationSeconds" --failure-mode "$SSM_FailureMode")
+fi
+controller_env=()
+if [[ "$SSM_FailureMode" == post-promotion ]]; then
+  controller_env=(SHIPSAFE_ENABLE_FAILURE_INJECTION=1)
+fi
+env "$${controller_env[@]}" /usr/bin/python3.12 shipsafe/controller.py --root "$release_root" --project-name shipsafe-production --production-config /etc/shipsafe/deployment.json --runtime-env "$RUNTIME_ENV" --runtime-dir /data/shipsafe/runtime "$${args[@]}"
 printf '%s' "$release_root" > /data/shipsafe/.current-release-root.tmp
 mv /data/shipsafe/.current-release-root.tmp /data/shipsafe/current-release-root
 rm -f /data/shipsafe/pending-release-root
