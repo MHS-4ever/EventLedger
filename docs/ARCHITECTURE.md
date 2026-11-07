@@ -1,6 +1,6 @@
 # EventLedger architecture
 
-This document describes the implemented Day 3 system. PostgreSQL is both the durable event store and the worker-coordination mechanism; there is no broker or in-memory queue.
+This document describes the EventLedger application and local delivery model. PostgreSQL is both the durable event store and the worker-coordination mechanism; there is no broker or in-memory queue. For the EC2 blue/green topology, Caddy, CI/CD, AWS services and deployment trade-offs, see [ShipSafe AWS architecture](../shipsafe/docs/AWS_HANDOVER.md#architecture-and-decisions). Local delivery runs `upgrade head`; ShipSafe AWS bootstrap deliberately targets the supported fixed revision.
 
 ## Components and dependencies
 

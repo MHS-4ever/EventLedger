@@ -1,5 +1,10 @@
 # Project 02 — ShipSafe: Automated Cloud Deployment & Rollback
 
+> Historical design plan. The implementation and AWS rollback exercise are now
+> complete; use [AWS handover](docs/AWS_HANDOVER.md) and [recorded results](docs/AWS_RESULTS.md)
+> for the implemented scope. Planned alternatives below are not current features
+> or instructions to modify IAM, infrastructure or workflows.
+
 **Builder portfolio project | Planned: 5–7 November 2026 (stretch target; stabilization may extend beyond this)**  
 **Status: Planned; implementation not started.**  
 **Application: EventLedger (Project 01), existing Python/FastAPI + PostgreSQL + worker.**

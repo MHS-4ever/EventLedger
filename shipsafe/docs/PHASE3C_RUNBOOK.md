@@ -1,5 +1,11 @@
 # Phase 3C deployment runbook
 
+> Historical pre-deployment procedure and decisions. The AWS exercise has since
+> completed; use [AWS handover](AWS_HANDOVER.md) for the current procedure,
+> [live results](AWS_RESULTS.md) for evidence, and [teardown checklist](AWS_TEARDOWN.md)
+> for cleanup. The missing-domain gate, cost estimates and unprovisioned status
+> below describe Phase 3C at the time, not today's resource inventory or pricing.
+
 This is a future operator procedure, not authorization to provision. No main
 AWS infrastructure, ECR image, release object, SSM invocation or DNS record was
 created during Phase 3C. See [implementation evidence](PHASE3C_REPORT.md).

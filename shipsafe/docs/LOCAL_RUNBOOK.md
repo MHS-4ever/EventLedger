@@ -88,7 +88,10 @@ Supported deploy modes are `candidate-startup`, `candidate-readiness`,
 75 after routing changes, leaving an in-progress state specifically for testing
 `recover`.
 
-Never enable failure injection on the future AWS host during normal operation.
+Never enable failure injection on the AWS host during normal operation. The
+manual AWS workflow exposes only the separately gated post-promotion test; see
+[AWS demonstration](../../docs/SHIPSAFE_ROLLBACK_DEMO.md). The broader controller
+failure modes above are local/operator testing capabilities, not workflow inputs.
 
 ## Safe stop
 

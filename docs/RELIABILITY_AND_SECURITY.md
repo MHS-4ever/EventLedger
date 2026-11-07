@@ -104,18 +104,20 @@ The worker evaluates the same compatibility check before polling and exits witho
 
 ## Deployment limitations
 
-The supplied Compose configuration is a reproducible local delivery setup, not a complete production platform. The repository does not implement:
+`compose.delivery.yaml` remains a local delivery setup. The separate ShipSafe
+AWS stack adds Caddy HTTPS, SSM SecureString/KMS secret distribution, CloudWatch
+logs/alarms, SNS integration and Terraform-managed EC2 blue/green deployment.
+See [AWS trust boundaries and limitations](../shipsafe/docs/AWS_HANDOVER.md).
+The repository does not establish:
 
-- TLS termination or certificate management.
 - Edge authentication controls, explicit request-size controls, rate limiting, or abuse protection.
 - Automatic API-key or database-credential rotation.
-- A production secret manager.
 - Database backups, restore testing, replication, failover, or point-in-time recovery.
-- Centralized logs, metrics, traces, dashboards, monitoring, or alerting.
+- Distributed tracing, operational dashboards or proven end-to-end notification delivery.
 - Dead-letter administration or a general event-requeue operator interface.
 - Lease heartbeat or cancellation of a stale handler already executing.
 - A broker, partitioning strategy, priority queues, or strict FIFO scheduling.
-- Horizontal orchestration, autoscaling, rolling deployment, or cloud infrastructure.
+- Multi-host orchestration, autoscaling, multi-AZ failover or a high-availability guarantee.
 - Real-world load, soak, latency, or capacity benchmarks.
 
 PostgreSQL is not published to the host in `compose.delivery.yaml`, and the API binds to host loopback. Exposure beyond the local machine requires an explicitly designed secure ingress path.
@@ -128,4 +130,4 @@ PostgreSQL is not published to the host in `compose.delivery.yaml`, and the API 
 - Stop services without deleting the volume when data must be retained.
 - Back up and test restoration before treating stored events as operational records.
 - Ensure custom handlers are idempotent with respect to every external system they affect.
-- Monitor failed events, expired leases, retry exhaustion, migration state, and worker progress in any future production deployment.
+- Monitor failed events, expired leases, retry exhaustion, migration state and worker progress; the existing AWS host/deployment alarms do not cover all of these application conditions.

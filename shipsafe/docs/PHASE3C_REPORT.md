@@ -1,5 +1,9 @@
 # Phase 3C implementation and readiness report
 
+> Historical pre-provisioning evidence. The NO-GO and missing-domain statements
+> below describe that phase only. See [AWS results](AWS_RESULTS.md) for the later
+> completed exercise and [AWS handover](AWS_HANDOVER.md) for current operations.
+
 ## Decision
 
 **Local Phase 3C implementation is complete; NO-GO for provisioning today.**
