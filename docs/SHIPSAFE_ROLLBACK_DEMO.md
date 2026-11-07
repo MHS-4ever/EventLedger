@@ -4,8 +4,10 @@ This is an opt-in production traffic test, available only through the manual
 ShipSafe release workflow on this repository's `main` branch. Normal runs use
 `failure_mode=none`. No host or application environment file enables injection.
 
-After this change is merged and the reviewed SSM document update is separately
-applied, start with a working active release and a new candidate SHA on `main`.
+The live demonstration and normal same-SHA retry are recorded in
+[AWS results](../shipsafe/docs/AWS_RESULTS.md). For a future repeat, first confirm
+the reviewed SSM document is the selected default version, then start with a
+working active release and a new candidate SHA on `main`.
 Keep `main` on that SHA for both workflow runs:
 
 1. Record the active API release, slot and worker release with `operation=status`.
@@ -30,7 +32,6 @@ input; dispatch a new normal run instead.
 The test deliberately causes a brief API outage between candidate shutdown and
 proxy restoration. Rollback still depends on the previous API, proxy and host
 remaining healthy. Offline tests demonstrate ordering and state restoration;
-they do not prove live AWS recovery. This PR does not apply Terraform or run the
-demonstration, alter IAM, change health endpoints, replace infrastructure, or
-modify database schema/data. Ordinary controller verification on the subsequent
+they do not replace the separate live state and external HTTPS observations.
+Injection changes no health endpoint, IAM policy or schema. Ordinary controller verification on the subsequent
 successful deployment retains its existing synthetic worker probe.

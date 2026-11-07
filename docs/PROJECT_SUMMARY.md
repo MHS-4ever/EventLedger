@@ -42,9 +42,21 @@ On 2026-11-04, the Python 3.12 suite reported 271 passing tests, including guard
 
 These results are functional evidence from local test and Docker environments. They are not load benchmarks, cloud deployment evidence, or a production-service claim.
 
+## ShipSafe AWS delivery
+
+ShipSafe adds a Terraform-managed single-host EC2 deployment with Caddy HTTPS,
+PostgreSQL on persistent EBS, GitHub Actions OIDC, immutable ECR images, verified
+S3 source archives, constrained SSM operations and CloudWatch/SNS integration.
+The live exercise verified a normal release, automatic API rollback after an
+injected post-promotion failure while retaining the old worker, and a normal
+retry of the same candidate SHA. See [AWS results](../shipsafe/docs/AWS_RESULTS.md)
+for evidence links and attribution, and [handover](../shipsafe/docs/AWS_HANDOVER.md)
+for architecture and operations. These observations do not imply zero downtime
+or host/database failover.
+
 ## Not implemented
 
-TLS termination, rate limiting, key rotation, multiple managed identities, an operator role, a secret manager, backups, monitoring and alerting, lease heartbeats, strict FIFO scheduling, cloud orchestration, and exactly-once external side effects remain outside the project.
+Rate limiting, key rotation, multiple managed application identities, an application operator role, automated backups and tested disaster restore, lease heartbeats, strict FIFO scheduling, multi-host availability and exactly-once external side effects remain outside the demonstrated system. The credentials action's unsupported `allowed-account-ids` input warning is unresolved; the publisher separately checks the STS account.
 
 ## Interview explanation
 

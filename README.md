@@ -2,7 +2,7 @@
 
 EventLedger is a PostgreSQL-backed webhook ingestion and event-processing service built with FastAPI. It accepts source-authenticated events, detects source-scoped duplicates, processes work in an independent worker, records status and attempt history, and recovers work whose processing lease expires.
 
-The repository demonstrates reliability patterns for a database-backed worker. It does not claim exactly-once execution, guaranteed eventual success, or production cloud deployment.
+The repository demonstrates reliability patterns for a database-backed worker and ShipSafe, an AWS deployment controller with a verified automatic rollback demonstration. It does not claim exactly-once execution, guaranteed eventual success, high availability or zero downtime.
 
 ## Problem
 
@@ -21,7 +21,44 @@ Webhook receivers need to acknowledge durable ingestion quickly while handling d
 - PostgreSQL migrations, isolated integration tests, and Docker delivery services for the database, migration job, API, and worker.
 - Separate process liveness and database/schema readiness endpoints.
 
-Future operational work includes TLS termination, rate limiting, key rotation, a production secret manager, backups, monitoring and alerting, lease heartbeats, and cloud orchestration. See [Reliability and security](docs/RELIABILITY_AND_SECURITY.md) for the complete boundary.
+ShipSafe adds Caddy HTTPS, SSM SecureString distribution, CloudWatch logs/alarms, SNS integration and Terraform-managed AWS deployment. Backup automation/restore drills, rate limiting, key rotation and lease heartbeats remain future work. See [Reliability and security](docs/RELIABILITY_AND_SECURITY.md) for the complete boundary.
+
+## ShipSafe: verified AWS deployment and rollback
+
+ShipSafe runs EventLedger on EC2 with Docker Compose, two API slots, one independent
+worker and PostgreSQL 18 on persistent encrypted EBS. A manual main-only GitHub
+Actions release uses OIDC temporary credentials, immutable ECR images, verified
+S3 release archives and constrained SSM documents. The controller verifies the
+candidate API, switches Caddy traffic, observes readiness, then replaces and
+verifies the worker with a synthetic event. Application rollback does not
+downgrade the database.
+
+The AWS exercise used account `542468167362`, Region `us-east-1`, and
+`https://shipsafe.mhasnain.me` (a historical demonstration endpoint that may later
+be torn down). Recorded evidence:
+
+- [Release #3](https://github.com/MHS-4ever/EventLedger/actions/runs/42249695993):
+  successful deployment and externally verified `/ready` HTTP 200.
+- [Release #5](https://github.com/MHS-4ever/EventLedger/actions/runs/42354112839):
+  deliberately stopped the promoted candidate and failed with `proxy readiness
+  check failed`. Verified state restored release `b0cafc241369-c0fe57fcfe36` on
+  green, retained its worker, and cleared the pending deployment. External
+  HTTPS `/ready` returned 200 afterward.
+- [Release #6](https://github.com/MHS-4ever/EventLedger/actions/runs/42354791446):
+  the same candidate source SHA deployed normally with `failure_mode=none`;
+  CI, SSM and public HTTPS verification passed. Recorded workflow duration was
+  4 minutes 8 seconds, not a performance benchmark.
+
+The injected failure can briefly interrupt API traffic. This is a single-host
+application rollback demonstration, not host/database failover. The pinned AWS
+credentials action warns that `allowed-account-ids` is unsupported; protection
+must not be attributed to that input. The publisher separately validates the
+AWS account through STS.
+
+Start with the [AWS handover and architecture](shipsafe/docs/AWS_HANDOVER.md),
+[evidence and its limits](shipsafe/docs/AWS_RESULTS.md),
+[manual rollback demonstration](docs/SHIPSAFE_ROLLBACK_DEMO.md), and
+[safe teardown/redeployment checklist](shipsafe/docs/AWS_TEARDOWN.md).
 
 ## Technology
 
@@ -219,7 +256,7 @@ As of 2026-11-04, the complete combined Python 3.12 run reported **271 passing t
 
 EventLedger provides durable local ingestion, atomic database claims, bounded retries, expired-lease recovery, stale-worker fencing, and PostgreSQL-enforced local fulfillment uniqueness. Handler code can execute more than once, and an external side effect cannot be made exactly-once by this database transaction alone. Exhausting bounded attempts can leave an event failed; eventual success is not guaranteed.
 
-The current authentication model is one static configured API key mapped to one source. It has no operator role, key rotation, TLS termination, or edge controls. Idempotency keys are stored in plaintext. Review [Reliability and security](docs/RELIABILITY_AND_SECURITY.md) before evaluating deployment suitability.
+The current application authentication model is one static configured API key mapped to one source. It has no application operator role, key rotation or rate limiting. ShipSafe terminates TLS at Caddy; local delivery alone does not. Idempotency keys are stored in plaintext. Review [Reliability and security](docs/RELIABILITY_AND_SECURITY.md) before evaluating deployment suitability.
 
 ## Documentation
 
@@ -228,3 +265,6 @@ The current authentication model is one static configured API key mapped to one 
 - [Project summary](docs/PROJECT_SUMMARY.md)
 - [ShipSafe compatibility bridge](shipsafe/docs/COMPATIBILITY.md)
 - [ShipSafe local blue/green runbook](shipsafe/docs/LOCAL_RUNBOOK.md)
+- [ShipSafe AWS handover](shipsafe/docs/AWS_HANDOVER.md)
+- [Live AWS results](shipsafe/docs/AWS_RESULTS.md)
+- [AWS teardown and redeployment](shipsafe/docs/AWS_TEARDOWN.md)

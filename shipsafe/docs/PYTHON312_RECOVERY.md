@@ -1,4 +1,9 @@
-﻿# Recover the AL2023 controller Python interpreter
+# Recover the AL2023 controller Python interpreter
+
+> Retained operator recovery procedure for the resolved bootstrap issue. See
+> [AWS handover](AWS_HANDOVER.md#failures-resolved-during-deployment) and
+> [live results](AWS_RESULTS.md) for final status. The hotfix-specific plan/retry
+> discussion below is historical; future incidents require a fresh state review.
 
 This procedure is for a separately approved live recovery after this hotfix is
 reviewed/merged. No commands in this document were executed by the hotfix task.

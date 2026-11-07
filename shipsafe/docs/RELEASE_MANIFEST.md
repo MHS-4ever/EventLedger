@@ -1,7 +1,9 @@
 # Release manifest and state specification
 
-Runtime files live under ignored `shipsafe/runtime/`. They are host-local
-operational records, not source-controlled configuration.
+Local runtime files live under ignored `shipsafe/runtime/`. AWS controller records
+live on persistent EBS at `/data/shipsafe/runtime`, with installed source under
+`/opt/shipsafe/releases/<sha>`. These are operational records, not source-controlled
+configuration. EBS state persistence does not preserve every host dependency.
 
 ## Release manifest
 
@@ -60,4 +62,4 @@ digest); `image_id` is Docker's config/content ID and differs from the ECR
 manifest digest. Local tags remain revalidated against that content ID.
 
 Production uses `compose.production.yaml`; local acceptance continues using
-`compose.yaml`. See [Phase 3C runbook](PHASE3C_RUNBOOK.md).
+`compose.yaml`. See [AWS handover](AWS_HANDOVER.md).

@@ -1,5 +1,8 @@
 # Local single-host architecture
 
+This page describes local Compose acceptance. For the deployed AWS topology,
+HTTPS, EBS and CI/CD trust boundaries, see [AWS handover](AWS_HANDOVER.md).
+
 ## Components
 
 ShipSafe uses one Docker Compose project on one Linux host:
